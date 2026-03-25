@@ -10,9 +10,3 @@ services:
         value: production
       - key: SESSION_SECRET
         generateValue: true
-      - key: DATA_DIR
-        value: /opt/render/project/data
-    disk:
-      name: ashoid-data
-      mountPath: /opt/render/project/data
-      sizeGB: 1
