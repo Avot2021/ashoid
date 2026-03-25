@@ -1,0 +1,55 @@
+{
+  "name": "ashoid",
+  "version": "14.0.0",
+  "description": "ASHOID - Plateforme de Gestion Associative",
+  "author": "ASHOID",
+  "license": "MIT",
+  "main": "electron.cjs",
+  "scripts": {
+    "dev":            "vite",
+    "build":          "vite build",
+    "preview":        "vite preview",
+    "start":          "node server/index.js",
+    "electron:dev":   "concurrently \"vite --port 5173\" \"wait-on http://localhost:5173 && cross-env ELECTRON_DEV=true electron .\"",
+    "electron:build": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "express":          "^4.18.2",
+    "express-session":  "^1.17.3",
+    "cors":             "^2.8.5",
+    "dotenv":           "^16.3.1",
+    "compression":      "^1.7.4",
+    "helmet":           "^7.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite":             "^5.1.0",
+    "react":            "^18.2.0",
+    "react-dom":        "^18.2.0",
+    "electron":         "^29.0.0",
+    "electron-builder": "^24.9.1",
+    "concurrently":     "^8.2.2",
+    "wait-on":          "^7.2.0",
+    "cross-env":        "^7.0.3"
+  },
+  "build": {
+    "appId": "com.ashoid.app",
+    "productName": "ASHOID",
+    "copyright": "Copyright © 2025 ASHOID",
+    "directories": { "output": "dist_exe" },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "public/logo.jpeg"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": ["fr"],
+      "language": "1036",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ASHOID"
+    },
+    "files": ["dist/**/*", "electron.cjs", "preload.cjs", "public/**/*"]
+  }
+}
