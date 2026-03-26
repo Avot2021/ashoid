@@ -1,0 +1,14 @@
+{
+  "name": "ASHOID - Gestion Associative",
+  "short_name": "ASHOID",
+  "description": "Plateforme de gestion associative",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0F2D5C",
+  "theme_color": "#0F2D5C",
+  "orientation": "any",
+  "icons": [
+    { "src": "/logo.jpeg", "sizes": "192x192", "type": "image/jpeg" },
+    { "src": "/logo.jpeg", "sizes": "512x512", "type": "image/jpeg" }
+  ]
+}
