@@ -1,0 +1,21 @@
+# render.yaml — Configuration Render.com
+# Placer ce fichier à la racine du projet ashoid-deploy/
+
+services:
+  - type: web
+    name: ashoid
+    env: node
+    region: frankfurt  # Choisir la région la plus proche
+    plan: starter      # ou "standard" selon votre abonnement
+    buildCommand: npm install && npm run build
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+    disk:
+      name: ashoid-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+    healthCheckPath: /api/health
