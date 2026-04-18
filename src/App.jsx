@@ -119,16 +119,16 @@ const STORAGE_KEY = "ashoid_v14_data";
 // URL du serveur Render.com — utilisée par le .exe et les autres PC
 // ═══════════════════════════════════════════════════════════════════════════
 // ASHOID — Configuration synchronisation 3 plateformes
-// .exe Windows ↔ Railway.app (principal) ↔ Render.com (miroir)
+// .exe Windows ↔ Render.com (serveur unique)
 // ═══════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 // ASHOID — Configuration serveurs
 // Railway = serveur principal (toujours actif, ne s'endort pas)
 // Render  = serveur miroir (copie de sécurité automatique)
 // ═══════════════════════════════════════════════════════════════
-const SERVER_RAILWAY = "https://ashoid-production.up.railway.app";
 const SERVER_RENDER  = "https://ashoid.onrender.com";
-const SERVER_URL     = SERVER_RAILWAY;
+const SERVER_RAILWAY = SERVER_RENDER; // Alias — Render est le serveur unique
+const SERVER_URL     = SERVER_RENDER;
 
 // Score de richesse des données (pour décider quelle version garder)
 const scoreData = (d) => !d ? 0 :
@@ -174,79 +174,36 @@ const chargerDepuis = async (url, timeout = 7000) => {
   return null;
 };
 
-// Sync croisée : Railway ↔ Render (le plus riche gagne)
-const syncCroisee = async (dataRailway, dataRender) => {
-  const sR = scoreData(dataRailway);
-  const sD = scoreData(dataRender);
-  if (sR > sD * 1.1) {
-    // Railway plus riche → copier vers Render
-    fetch(`${SERVER_RENDER}/api/data`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dataRailway) }).catch(() => {});
-    console.log(`[ASHOID] 🔄 Railway→Render (${sR} > ${sD})`);
-    return dataRailway;
-  } else if (sD > sR * 1.1) {
-    // Render plus riche → copier vers Railway
-    fetch(`${SERVER_RAILWAY}/api/data`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dataRender) }).catch(() => {});
-    console.log(`[ASHOID] 🔄 Render→Railway (${sD} > ${sR})`);
-    return dataRender;
-  }
-  console.log(`[ASHOID] ✅ Serveurs identiques (${sR}=${sD})`);
-  return dataRailway || dataRender;
-};
+// Render = serveur unique, pas de sync croisée
+const syncCroisee = async (data) => data;
 
-// Envoi vers tous les serveurs disponibles
+// Envoi vers Render uniquement
 const syncVersServeurs = async (data, silent = true) => {
-  const payload = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) };
-  const resultats = [];
-  // Railway (principal)
   try {
-    const r = await fetch(`${SERVER_RAILWAY}/api/data`, { ...payload, signal: AbortSignal.timeout(6000) });
-    const ok = r.ok;
-    if (!silent) console.log(ok ? "[ASHOID] ✅ Railway OK" : "[ASHOID] ⚠️ Railway échoué");
-    resultats.push({ serveur: "railway", ok });
+    const r = await fetch(`${SERVER_RENDER}/api/data`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data), signal: AbortSignal.timeout(12000),
+    });
+    if (!silent) console.log(r.ok ? "[ASHOID] ✅ Render OK" : "[ASHOID] ⚠️ Render KO");
+    return [{ serveur: "render", ok: r.ok }];
   } catch (e) {
-    if (!silent) console.warn("[ASHOID] ⚠️ Railway inaccessible:", e.message);
-    resultats.push({ serveur: "railway", ok: false });
+    if (!silent) console.warn("[ASHOID] ⚠️ Render inaccessible:", e.message);
+    return [{ serveur: "render", ok: false }];
   }
-  // Render.com (miroir)
-  try {
-    const r = await fetch(`${SERVER_RENDER}/api/data`, { ...payload, signal: AbortSignal.timeout(8000) });
-    if (!silent) console.log(r.ok ? "[ASHOID] ✅ Render miroir OK" : "[ASHOID] ⚠️ Render miroir échoué");
-    resultats.push({ serveur: "render", ok: r.ok });
-  } catch {
-    resultats.push({ serveur: "render", ok: false }); // silencieux si Render dort
-  }
-  return resultats;
 };
 
-// Charger depuis le meilleur serveur disponible
-const chargerDepuisServeurs = async (timeout = 6000) => {
-  // Essayer Railway en premier
+// Charger depuis Render (serveur unique)
+const chargerDepuisServeurs = async (timeout = 12000) => {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeout);
-    const res = await fetch(`${SERVER_RAILWAY}/api/data`, { signal: ctrl.signal });
+    const res = await fetch(`${SERVER_RENDER}/api/data`, { signal: ctrl.signal });
     clearTimeout(t);
     if (res.ok) {
       const json = await res.json();
       if (json.ok && json.data) {
-        console.log("[ASHOID] ✅ Chargé depuis Railway");
-        return { data: json.data, source: "railway" };
-      }
-    }
-  } catch (e) {
-    console.warn("[ASHOID] ⚠️ Railway inaccessible — essai Render:", e.message);
-  }
-  // Fallback Render.com
-  try {
-    const ctrl2 = new AbortController();
-    const t2 = setTimeout(() => ctrl2.abort(), 9000);
-    const res2 = await fetch(`${SERVER_RENDER}/api/data`, { signal: ctrl2.signal });
-    clearTimeout(t2);
-    if (res2.ok) {
-      const json2 = await res2.json();
-      if (json2.ok && json2.data) {
-        console.log("[ASHOID] ✅ Chargé depuis Render.com (secours)");
-        return { data: json2.data, source: "render" };
+        console.log("[ASHOID] ✅ Chargé depuis Render");
+        return { data: json.data, source: "render" };
       }
     }
   } catch (e) {
@@ -296,52 +253,17 @@ const saveData = (data) => {
   if (IS_ELECTRON && window.electronAPI) {
     // ── 2. Electron : fichier local (fonctionne hors ligne) ───────────────
     window.electronAPI.writeData(JSON.stringify(data)).catch(() => {});
-    // ── 3. Electron : Railway via IPC processus principal (pas de CORS) ───
+    // ── 3. Electron → Render (serveur unique) ───────────────────────────
     window.electronAPI.renderSave(data)
-      .then(r => {
-        if (r?.ok) {
-          console.log("[ASHOID] ✅ .exe → Railway OK");
-          // Si Railway OK → envoyer aussi vers Render en miroir
-          fetch(`${SERVER_RENDER}/api/data`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data),
-          }).then(() => console.log("[ASHOID] ✅ .exe → Render miroir OK"))
-            .catch(() => {});
-        } else {
-          // Railway KO → essayer Render directement
-          console.warn("[ASHOID] ⚠️ Railway KO — envoi vers Render");
-          fetch(`${SERVER_RENDER}/api/data`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(data),
-          }).then(() => console.log("[ASHOID] ✅ .exe → Render secours OK"))
-            .catch(() => {});
-        }
-      }).catch(() => {});
+      .then(r => console.log(r?.ok ? "[ASHOID] ✅ .exe → Render OK" : "[ASHOID] ⚠️ .exe → Render KO"))
+      .catch(() => {});
   } else {
-    // ── 4. Navigateur web sur Railway → envoi local + miroir Render ───────
-    const isOnRailway = window.location.hostname.includes("railway.app");
-    const isOnRender  = window.location.hostname.includes("onrender.com");
-    const url = (isOnRailway || isOnRender)
-      ? "/api/data"                   // Chemin relatif si déjà sur le bon serveur
-      : `${SERVER_RAILWAY}/api/data`; // Local → Railway
-
-    fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    }).then(() => {
-      console.log("[ASHOID] ✅ Navigateur → serveur principal OK");
-      // Si on est sur Railway → aussi envoyer vers Render en miroir
-      if (isOnRailway) {
-        fetch(`${SERVER_RENDER}/api/data`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        }).catch(() => {});
-      }
-    }).catch(() => {});
+    // ── 4. Navigateur → Render (serveur unique) ──────────────────────────
+    const isOnRender = window.location.hostname.includes("onrender.com");
+    const url = isOnRender ? "/api/data" : `${SERVER_RENDER}/api/data`;
+    fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then(() => console.log("[ASHOID] ✅ Navigateur → Render OK"))
+      .catch(() => {});
   }
 };
 
@@ -363,26 +285,26 @@ const loadDataAsync = async () => {
   // MODE ELECTRON (.exe)
   // ════════════════════════════════════════════════════════
   if (IS_ELECTRON && window.electronAPI) {
-    // 1. Railway via IPC processus principal (pas de CORS)
+    // 1. Render via IPC (sans CORS, timeout généreux)
     try {
       const result = await window.electronAPI.renderLoad();
       if (result?.ok && result?.data) {
         const merged = mergeWithDefault(result.data);
         window.electronAPI.writeData(JSON.stringify(merged)).catch(() => {});
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
-        console.log("[ASHOID] ✅ .exe chargé depuis Railway");
+        console.log("[ASHOID] ✅ .exe chargé depuis Render");
         return merged;
       }
-    } catch (e) { console.warn("[ASHOID] ⚠️ Railway IPC:", e.message); }
+    } catch (e) { console.warn("[ASHOID] ⚠️ Render IPC:", e.message); }
 
-    // 2. Render.com en secours (fetch direct)
+    // 2. Render fetch direct (fallback)
     try {
-      const data = await fetchServeur(`${SERVER_RENDER}/api/data`, 9000);
+      const data = await fetchServeur(`${SERVER_RENDER}/api/data`, 15000);
       if (data) {
         const merged = mergeWithDefault(data);
         window.electronAPI.writeData(JSON.stringify(merged)).catch(() => {});
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
-        console.log("[ASHOID] ✅ .exe chargé depuis Render.com (secours)");
+        console.log("[ASHOID] ✅ .exe chargé depuis Render (fetch direct)");
         return merged;
       }
     } catch {}
@@ -407,31 +329,19 @@ const loadDataAsync = async () => {
   }
 
   // ════════════════════════════════════════════════════════
-  // MODE NAVIGATEUR (Railway ou Render)
+  // MODE NAVIGATEUR → Render (serveur unique)
   // ════════════════════════════════════════════════════════
-  const isOnRailway = window.location.hostname.includes("railway.app");
-  const isOnRender  = window.location.hostname.includes("onrender.com");
-
-  // Sur Railway ou Render → chemin relatif (plus rapide)
-  if (isOnRailway || isOnRender) {
-    try {
-      const data = await fetchServeur("/api/data");
-      if (data) {
-        const merged = mergeWithDefault(data);
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
-        console.log(`[ASHOID] ✅ Navigateur chargé depuis ${isOnRailway ? "Railway" : "Render"}`);
-        return merged;
-      }
-    } catch {}
-  } else {
-    // Dev local → essayer Railway puis Render
-    const data = await chargerDepuisServeurs();
-    if (data?.data) {
-      const merged = mergeWithDefault(data.data);
+  const isOnRender = window.location.hostname.includes("onrender.com");
+  try {
+    const url = isOnRender ? "/api/data" : `${SERVER_RENDER}/api/data`;
+    const data = await fetchServeur(url, 12000);
+    if (data) {
+      const merged = mergeWithDefault(data);
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
+      console.log("[ASHOID] ✅ Navigateur chargé depuis Render");
       return merged;
     }
-  }
+  } catch {}
 
   // localStorage fallback
   try {
@@ -3388,8 +3298,7 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
   const verifierServeurs = async () => {
     setStatuts(s => ({...s, checking: true}));
     const [r1, r2] = await Promise.allSettled([
-      fetch(`${SERVER_RAILWAY}/api/health`, {signal: AbortSignal.timeout(6000)}).then(r=>r.ok ? "ok" : "err").catch(()=>"off"),
-      fetch(`${SERVER_RENDER}/api/health`, {signal: AbortSignal.timeout(9000)}).then(r=>r.ok ? "ok" : "err").catch(()=>"off"),
+      fetch(`${SERVER_RENDER}/api/health`, {signal: AbortSignal.timeout(10000)}).then(r=>r.ok ? "ok" : "err").catch(()=>"off"),
     ]);
     setStatuts({
       railway: r1.status==="fulfilled" ? r1.value : "off",
@@ -4803,26 +4712,14 @@ export default function App() {
           console.log(`[ASHOID] 🔄 .exe sync depuis ${source}`);
         }
 
-      // ── Mode navigateur : charger Railway + Render et comparer ────────────
+      // ── Mode navigateur → Render uniquement ──────────────────────────────
       } else {
-        const isLocal = window.location.hostname === "localhost" || window.location.protocol === "file:";
-        const isRailway = window.location.hostname.includes("railway.app");
-        const isRender  = window.location.hostname.includes("onrender.com");
-
-        // Charger les deux en parallèle
-        const [dRailway, dRender] = await Promise.allSettled([
-          chargerDepuis(isRailway ? "/api/data" : `${SERVER_RAILWAY}/api/data`, 7000),
-          chargerDepuis(isRender  ? "/api/data" : `${SERVER_RENDER}/api/data`,  9000),
-        ]);
-
-        const dataRailway = dRailway.status === "fulfilled" ? dRailway.value : null;
-        const dataRender  = dRender.status  === "fulfilled" ? dRender.value  : null;
-
-        if (dataRailway || dataRender) {
-          // Sync croisée : le plus riche gagne + harmonisation automatique
-          const meilleur = await syncCroisee(dataRailway, dataRender);
-          meilleurData = mergeWithDefault(meilleur);
-          source = dataRailway && scoreData(dataRailway) >= scoreData(dataRender) ? "Railway" : "Render";
+        const isOnRender = window.location.hostname.includes("onrender.com");
+        const url = isOnRender ? "/api/data" : `${SERVER_RENDER}/api/data`;
+        const dataRender = await chargerDepuis(url, 12000);
+        if (dataRender) {
+          meilleurData = mergeWithDefault(dataRender);
+          source = "Render";
         }
       }
 
@@ -5099,17 +4996,11 @@ export default function App() {
             <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{data.config?.nom_association || "ASHOID"} · {user.role} · {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
           </div>
           <div style={{ display: "flex", gap: 7, alignItems: "center", flexShrink: 0 }}>
-            {/* Indicateur de connexion + bouton sync amélioré */}
+            {/* Indicateur connexion Render (serveur unique) */}
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {/* Statut Railway */}
-              <div title="ashoid-production.up.railway.app" style={{ fontSize: 10, background: online ? T.mint : "#FEF3C7", color: online ? T.emerald : T.amber, padding: "4px 9px", borderRadius: 6, fontWeight: 600, border: `1px solid ${online ? T.emerald : "#FCD34D"}`, display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: online ? T.emerald : T.amber, display: "inline-block" }} />
-                🚂 Railway
-              </div>
-              {/* Statut Render */}
-              <div title="ashoid.onrender.com" style={{ fontSize: 10, background: "#F3F4F6", color: T.slate, padding: "4px 9px", borderRadius: 6, fontWeight: 600, border: `1px solid ${T.border}`, display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: T.slate, display: "inline-block" }} />
-                ☁️ Render
+              <div title="https://ashoid.onrender.com" style={{ fontSize: 10, background: online ? T.mint : T.rose, color: online ? T.emerald : T.red, padding: "4px 9px", borderRadius: 6, fontWeight: 600, border: `1px solid ${online ? T.emerald : T.red}`, display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: online ? T.emerald : T.red, display: "inline-block" }} />
+                {online ? "☁️ Render ✅" : "☁️ Render ❌"}
               </div>
               {lastSync && <span style={{ fontSize: 10, color: T.muted }}>· {lastSync.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>}
               <button
