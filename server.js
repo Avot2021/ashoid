@@ -21,7 +21,7 @@ const SERVER_RENDER  = "https://ashoid.onrender.com";
 
 // Sur Render sans disque : /tmp (perd données au redémarrage mais sync auto)
 // Sur Railway : ./data/ (persistant)
-const DATA_DIR   = IS_RENDER ? "/tmp/ashoid_data" : path.join(__dirname, "data");
+const DATA_DIR   = IS_RENDER ? "/var/data" : path.join(__dirname, "data");
 const DATA_FILE  = path.join(DATA_DIR, "ashoid_data.json");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
 
