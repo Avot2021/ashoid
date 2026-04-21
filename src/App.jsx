@@ -3873,7 +3873,7 @@ const Mediatheque = ({ data, setData, showToast, user }) => {
 // RÉCUPÉRATION DE MOT DE PASSE
 // Par téléphone (SMS simulé) ou par email
 // ═══════════════════════════════════════════════════════════════
-const MotDePasseOublie = ({ users, setData, onBack, showToastFn }) => {
+const MotDePasseOublie = ({ users, personnes = [], setData, onBack, showToastFn }) => {
   const ETAPES = { CHOIX: 'choix', TELEPHONE: 'telephone', EMAIL: 'email', CODE: 'code', NOUVEAU: 'nouveau', SUCCES: 'succes' };
   const [etape, setEtape]       = useState(ETAPES.CHOIX);
   const [methode, setMethode]   = useState('');
@@ -3889,20 +3889,45 @@ const MotDePasseOublie = ({ users, setData, onBack, showToastFn }) => {
 
   const genererCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
+  const normalizePhone = (p) => {
+    let n = (p || '').replace(/[\s\-\.\(\)\+]/g, '');
+    if (n.startsWith('00')) n = n.slice(2);          // 0033... → 33...
+    if (n.startsWith('33') && n.length === 11) n = n; // +33XXXXXXXXX → 33XXXXXXXXX
+    if (n.startsWith('0') && n.length === 10) n = '33' + n.slice(1); // 06... → 3306 → 336...
+    return n;
+  };
+
   const chercherParTelephone = () => {
     setErr('');
-    const tel = valeur.trim().replace(/[\s\-\.\(\)]/g, '');
+    const tel = normalizePhone(valeur.trim());
     if (tel.length < 8) { setErr('Veuillez saisir votre numéro de téléphone complet.'); return; }
-    // Chercher dans utilisateurs ET dans personnes liées
+
+    // 1. Chercher dans les comptes utilisateurs
     let u = users.find(u =>
-      (u.telephone  || '').replace(/[\s\-\.\(\)]/g, '') === tel ||
-      (u.telephone2 || '').replace(/[\s\-\.\(\)]/g, '') === tel
+      normalizePhone(u.telephone)  === tel ||
+      normalizePhone(u.telephone2) === tel
     );
-    if (!u && typeof setData !== 'undefined') {
-      // Chercher dans les personnes et trouver le compte lié
-      // (passé via props si disponible)
+
+    // 2. Chercher dans les fiches adhérents si pas trouvé
+    if (!u) {
+      const personne = personnes.find(p =>
+        normalizePhone(p.telephone)  === tel ||
+        normalizePhone(p.telephone2) === tel
+      );
+      if (personne) {
+        // Trouver le compte utilisateur lié à cette personne
+        u = users.find(uu =>
+          uu.id_personne === personne.id ||
+          (uu.nom || '').toLowerCase().includes(personne.nom.toLowerCase())
+        );
+        // Si pas de compte utilisateur, on crée une entrée temporaire avec le login de la personne
+        if (!u && personne.email) {
+          u = users.find(uu => (uu.email || '').toLowerCase() === personne.email.toLowerCase());
+        }
+      }
     }
-    if (!u) { setErr('Aucun compte trouvé avec ce numéro. Vérifiez le format (+33...) ou contactez un administrateur.'); return; }
+
+    if (!u) { setErr('Aucun compte trouvé avec ce numéro. Essayez avec +33 ou votre email.'); return; }
     if (u.actif === false) { setErr('Ce compte est désactivé. Contactez un administrateur.'); return; }
     const code = genererCode();
     setCodeGenere(code);
@@ -3925,7 +3950,26 @@ const MotDePasseOublie = ({ users, setData, onBack, showToastFn }) => {
       setErr('Veuillez saisir une adresse email valide (ex: prenom@domaine.fr).');
       return;
     }
-    const u = users.find(u => (u.email || '').toLowerCase() === email);
+
+    // 1. Chercher dans les comptes utilisateurs
+    let u = users.find(u => (u.email || '').toLowerCase() === email);
+
+    // 2. Chercher dans les fiches adhérents si pas trouvé
+    if (!u) {
+      const personne = personnes.find(p => (p.email || '').toLowerCase() === email);
+      if (personne) {
+        u = users.find(uu =>
+          uu.id_personne === personne.id ||
+          (uu.email || '').toLowerCase() === email
+        );
+        // Si la personne existe mais n'a pas de compte, informer l'admin
+        if (!u) {
+          setErr('Adhérent trouvé mais aucun compte de connexion associé. Contactez un administrateur.');
+          return;
+        }
+      }
+    }
+
     if (!u) { setErr('Aucun compte trouvé avec cet email. Vérifiez l\'orthographe ou utilisez le téléphone.'); return; }
     if (u.actif === false) { setErr('Ce compte est désactivé. Contactez un administrateur.'); return; }
     const code = genererCode();
@@ -5152,6 +5196,7 @@ export default function App() {
     if (showMdpOublie) return (
       <MotDePasseOublie
         users={data.utilisateurs || []}
+        personnes={data.personnes || []}
         setData={setData}
         showToastFn={showToast}
         onBack={() => setShowMdpOublie(false)}
