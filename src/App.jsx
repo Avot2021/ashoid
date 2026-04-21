@@ -57,10 +57,10 @@ const REGIONS = ["Île-de-France", "Auvergne-Rhône-Alpes", "Bourgogne-Franche-C
 // ── Default data ───────────────────────────────────────────────────────────────
 const DEFAULT = {
   utilisateurs: [
-    { id: 1, login: "admin", mot_de_passe: "admin123", role: "Admin", nom: "Administrateur", actif: true },
-    { id: 2, login: "tresor", mot_de_passe: "tresor123", role: "Trésorier", nom: "Trésorier", actif: true },
-    { id: 3, login: "secretaire", mot_de_passe: "secretaire123", role: "Secrétaire", nom: "Secrétaire", actif: true },
-    { id: 4, login: "lecture", mot_de_passe: "lecture123", role: "Lecture", nom: "Visiteur", actif: true },
+    { id: 1, login: "admin",      mot_de_passe: "admin123",      role: "Admin",      nom: "Administrateur", prenom: "Super",    email: "admin@ashoid.fr",      telephone: "+33600000001", actif: true },
+    { id: 2, login: "tresor",     mot_de_passe: "tresor123",     role: "Trésorier",  nom: "Trésorier",      prenom: "Jean",     email: "tresor@ashoid.fr",     telephone: "+33600000002", actif: true },
+    { id: 3, login: "secretaire", mot_de_passe: "secretaire123", role: "Secrétaire", nom: "Secrétaire",     prenom: "Marie",    email: "secretaire@ashoid.fr", telephone: "+33600000003", actif: true },
+    { id: 4, login: "lecture",    mot_de_passe: "lecture123",    role: "Lecture",    nom: "Visiteur",       prenom: "Visiteur", email: "lecture@ashoid.fr",    telephone: "+33600000004", actif: true },
   ],
   personnes: [
     { id: 1, id_personne: "H001", prenom: "Ahmed", nom: "Abdallah", surnom: "", genre: "Homme", statut: "Majeur", region: "Marseille", telephone: "06 12 34 56 78", telephone2: "", email: "ahmed@ashoid.fr", tranche_age: "30-40", date_naissance: "1984-05-10", lieu_naissance: "Moroni (Comores)", nationalite: "Française", cotisation_obligatoire: "Oui", montant_cotisation_perso: "", date_inscription: "2024-01-15", date_fin_adhesion: "", situation_matrimoniale: "Marié(e)", lien_village: "Père", enfant_de: "", origine_conjoint: "Interne", photo: "", numero_carte: "CARTE-2024-001", adresse: "12 rue des Acacias", code_postal: "13001", ville: "Marseille", pays: "France", profession: "Enseignant", niveau_etude: "Bac+3", langue_parlee: "Français, Comorien", nom_conjoint: "Rahma Abdallah", nb_enfants: "3", groupe_sanguin: "", handicap: "Non", notes_internes: "", actif: true, parrain: "" },
@@ -119,16 +119,16 @@ const STORAGE_KEY = "ashoid_v14_data";
 // URL du serveur Render.com — utilisée par le .exe et les autres PC
 // ═══════════════════════════════════════════════════════════════════════════
 // ASHOID — Configuration synchronisation 3 plateformes
-// .exe Windows ↔ Render.com (serveur unique)
+// .exe Windows ↔ Railway.app (principal) ↔ Render.com (miroir)
 // ═══════════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 // ASHOID — Configuration serveurs
 // Railway = serveur principal (toujours actif, ne s'endort pas)
 // Render  = serveur miroir (copie de sécurité automatique)
 // ═══════════════════════════════════════════════════════════════
+const SERVER_RAILWAY = "https://ashoid-production.up.railway.app";
 const SERVER_RENDER  = "https://ashoid.onrender.com";
-const SERVER_RAILWAY = SERVER_RENDER; // Alias — Render est le serveur unique
-const SERVER_URL     = SERVER_RENDER;
+const SERVER_URL     = SERVER_RAILWAY;
 
 // Score de richesse des données (pour décider quelle version garder)
 const scoreData = (d) => !d ? 0 :
@@ -163,7 +163,7 @@ const envoyerVersServeur = async (url, data, tentatives = 2) => {
 };
 
 // Charger depuis un serveur avec timeout
-const chargerDepuis = async (url, timeout = 7000) => {
+const chargerDepuis = async (url, timeout = 3000) => {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeout);
@@ -174,36 +174,79 @@ const chargerDepuis = async (url, timeout = 7000) => {
   return null;
 };
 
-// Render = serveur unique, pas de sync croisée
-const syncCroisee = async (data) => data;
-
-// Envoi vers Render uniquement
-const syncVersServeurs = async (data, silent = true) => {
-  try {
-    const r = await fetch(`${SERVER_RENDER}/api/data`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data), signal: AbortSignal.timeout(12000),
-    });
-    if (!silent) console.log(r.ok ? "[ASHOID] ✅ Render OK" : "[ASHOID] ⚠️ Render KO");
-    return [{ serveur: "render", ok: r.ok }];
-  } catch (e) {
-    if (!silent) console.warn("[ASHOID] ⚠️ Render inaccessible:", e.message);
-    return [{ serveur: "render", ok: false }];
+// Sync croisée : Railway ↔ Render (le plus riche gagne)
+const syncCroisee = async (dataRailway, dataRender) => {
+  const sR = scoreData(dataRailway);
+  const sD = scoreData(dataRender);
+  if (sR > sD * 1.1) {
+    // Railway plus riche → copier vers Render
+    fetch(`${SERVER_RENDER}/api/data`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dataRailway) }).catch(() => {});
+    console.log(`[ASHOID] 🔄 Railway→Render (${sR} > ${sD})`);
+    return dataRailway;
+  } else if (sD > sR * 1.1) {
+    // Render plus riche → copier vers Railway
+    fetch(`${SERVER_RAILWAY}/api/data`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dataRender) }).catch(() => {});
+    console.log(`[ASHOID] 🔄 Render→Railway (${sD} > ${sR})`);
+    return dataRender;
   }
+  console.log(`[ASHOID] ✅ Serveurs identiques (${sR}=${sD})`);
+  return dataRailway || dataRender;
 };
 
-// Charger depuis Render (serveur unique)
-const chargerDepuisServeurs = async (timeout = 12000) => {
+// Envoi vers tous les serveurs disponibles
+const syncVersServeurs = async (data, silent = true) => {
+  const payload = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) };
+  const resultats = [];
+  // Railway (principal)
+  try {
+    const r = await fetch(`${SERVER_RAILWAY}/api/data`, { ...payload });
+    const ok = r.ok;
+    if (!silent) console.log(ok ? "[ASHOID] ✅ Railway OK" : "[ASHOID] ⚠️ Railway échoué");
+    resultats.push({ serveur: "railway", ok });
+  } catch (e) {
+    if (!silent) console.warn("[ASHOID] ⚠️ Railway inaccessible:", e.message);
+    resultats.push({ serveur: "railway", ok: false });
+  }
+  // Render.com (miroir)
+  try {
+    const r = await fetch(`${SERVER_RENDER}/api/data`, { ...payload });
+    if (!silent) console.log(r.ok ? "[ASHOID] ✅ Render miroir OK" : "[ASHOID] ⚠️ Render miroir échoué");
+    resultats.push({ serveur: "render", ok: r.ok });
+  } catch {
+    resultats.push({ serveur: "render", ok: false }); // silencieux si Render dort
+  }
+  return resultats;
+};
+
+// Charger depuis le meilleur serveur disponible
+const chargerDepuisServeurs = async (timeout = 2000) => {
+  // Essayer Railway en premier
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeout);
-    const res = await fetch(`${SERVER_RENDER}/api/data`, { signal: ctrl.signal });
+    const res = await fetch(`${SERVER_RAILWAY}/api/data`, { signal: ctrl.signal });
     clearTimeout(t);
     if (res.ok) {
       const json = await res.json();
       if (json.ok && json.data) {
-        console.log("[ASHOID] ✅ Chargé depuis Render");
-        return { data: json.data, source: "render" };
+        console.log("[ASHOID] ✅ Chargé depuis Railway");
+        return { data: json.data, source: "railway" };
+      }
+    }
+  } catch (e) {
+    console.warn("[ASHOID] ⚠️ Railway inaccessible — essai Render:", e.message);
+  }
+  // Fallback Render.com
+  try {
+    const ctrl2 = new AbortController();
+    const t2 = setTimeout(() => ctrl2.abort(), 9000);
+    const res2 = await fetch(`${SERVER_RENDER}/api/data`, { signal: ctrl2.signal });
+    clearTimeout(t2);
+    if (res2.ok) {
+      const json2 = await res2.json();
+      if (json2.ok && json2.data) {
+        console.log("[ASHOID] ✅ Chargé depuis Render.com (secours)");
+        return { data: json2.data, source: "render" };
       }
     }
   } catch (e) {
@@ -253,23 +296,58 @@ const saveData = (data) => {
   if (IS_ELECTRON && window.electronAPI) {
     // ── 2. Electron : fichier local (fonctionne hors ligne) ───────────────
     window.electronAPI.writeData(JSON.stringify(data)).catch(() => {});
-    // ── 3. Electron → Render (serveur unique) ───────────────────────────
+    // ── 3. Electron : Railway via IPC processus principal (pas de CORS) ───
     window.electronAPI.renderSave(data)
-      .then(r => console.log(r?.ok ? "[ASHOID] ✅ .exe → Render OK" : "[ASHOID] ⚠️ .exe → Render KO"))
-      .catch(() => {});
+      .then(r => {
+        if (r?.ok) {
+          console.log("[ASHOID] ✅ .exe → Railway OK");
+          // Si Railway OK → envoyer aussi vers Render en miroir
+          fetch(`${SERVER_RENDER}/api/data`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          }).then(() => console.log("[ASHOID] ✅ .exe → Render miroir OK"))
+            .catch(() => {});
+        } else {
+          // Railway KO → essayer Render directement
+          console.warn("[ASHOID] ⚠️ Railway KO — envoi vers Render");
+          fetch(`${SERVER_RENDER}/api/data`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          }).then(() => console.log("[ASHOID] ✅ .exe → Render secours OK"))
+            .catch(() => {});
+        }
+      }).catch(() => {});
   } else {
-    // ── 4. Navigateur → Render (serveur unique) ──────────────────────────
-    const isOnRender = window.location.hostname.includes("onrender.com");
-    const url = isOnRender ? "/api/data" : `${SERVER_RENDER}/api/data`;
-    fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-      .then(() => console.log("[ASHOID] ✅ Navigateur → Render OK"))
-      .catch(() => {});
+    // ── 4. Navigateur web sur Railway → envoi local + miroir Render ───────
+    const isOnRailway = window.location.hostname.includes("railway.app");
+    const isOnRender  = window.location.hostname.includes("onrender.com");
+    const url = (isOnRailway || isOnRender)
+      ? "/api/data"                   // Chemin relatif si déjà sur le bon serveur
+      : `${SERVER_RAILWAY}/api/data`; // Local → Railway
+
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }).then(() => {
+      console.log("[ASHOID] ✅ Navigateur → serveur principal OK");
+      // Si on est sur Railway → aussi envoyer vers Render en miroir
+      if (isOnRailway) {
+        fetch(`${SERVER_RENDER}/api/data`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }).catch(() => {});
+      }
+    }).catch(() => {});
   }
 };
 
 // ── Chargement async : Render d'abord, fallback local ───────────────────────
 // Helper fetch avec timeout
-const fetchServeur = async (url, timeout = 6000) => {
+const fetchServeur = async (url, timeout = 3000) => {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeout);
   try {
@@ -285,26 +363,26 @@ const loadDataAsync = async () => {
   // MODE ELECTRON (.exe)
   // ════════════════════════════════════════════════════════
   if (IS_ELECTRON && window.electronAPI) {
-    // 1. Render via IPC (sans CORS, timeout généreux)
+    // 1. Railway via IPC processus principal (pas de CORS)
     try {
       const result = await window.electronAPI.renderLoad();
       if (result?.ok && result?.data) {
         const merged = mergeWithDefault(result.data);
         window.electronAPI.writeData(JSON.stringify(merged)).catch(() => {});
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
-        console.log("[ASHOID] ✅ .exe chargé depuis Render");
+        console.log("[ASHOID] ✅ .exe chargé depuis Railway");
         return merged;
       }
-    } catch (e) { console.warn("[ASHOID] ⚠️ Render IPC:", e.message); }
+    } catch (e) { console.warn("[ASHOID] ⚠️ Railway IPC:", e.message); }
 
-    // 2. Render fetch direct (fallback)
+    // 2. Render.com en secours (fetch direct)
     try {
-      const data = await fetchServeur(`${SERVER_RENDER}/api/data`, 15000);
+      const data = await fetchServeur(`${SERVER_RENDER}/api/data`, 9000);
       if (data) {
         const merged = mergeWithDefault(data);
         window.electronAPI.writeData(JSON.stringify(merged)).catch(() => {});
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
-        console.log("[ASHOID] ✅ .exe chargé depuis Render (fetch direct)");
+        console.log("[ASHOID] ✅ .exe chargé depuis Render.com (secours)");
         return merged;
       }
     } catch {}
@@ -329,19 +407,31 @@ const loadDataAsync = async () => {
   }
 
   // ════════════════════════════════════════════════════════
-  // MODE NAVIGATEUR → Render (serveur unique)
+  // MODE NAVIGATEUR (Railway ou Render)
   // ════════════════════════════════════════════════════════
-  const isOnRender = window.location.hostname.includes("onrender.com");
-  try {
-    const url = isOnRender ? "/api/data" : `${SERVER_RENDER}/api/data`;
-    const data = await fetchServeur(url, 12000);
-    if (data) {
-      const merged = mergeWithDefault(data);
+  const isOnRailway = window.location.hostname.includes("railway.app");
+  const isOnRender  = window.location.hostname.includes("onrender.com");
+
+  // Sur Railway ou Render → chemin relatif (plus rapide)
+  if (isOnRailway || isOnRender) {
+    try {
+      const data = await fetchServeur("/api/data");
+      if (data) {
+        const merged = mergeWithDefault(data);
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
+        console.log(`[ASHOID] ✅ Navigateur chargé depuis ${isOnRailway ? "Railway" : "Render"}`);
+        return merged;
+      }
+    } catch {}
+  } else {
+    // Dev local → essayer Railway puis Render
+    const data = await chargerDepuisServeurs();
+    if (data?.data) {
+      const merged = mergeWithDefault(data.data);
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
-      console.log("[ASHOID] ✅ Navigateur chargé depuis Render");
       return merged;
     }
-  } catch {}
+  }
 
   // localStorage fallback
   try {
@@ -567,7 +657,7 @@ const Table = ({ cols, rows, onEdit, onDelete, onView, onExtra, emptyText = "Auc
                     {onView && <Btn label="Voir" icon="👁️" variant="ghost" sm onClick={() => onView(row)} />}
                     {onExtra && onExtra(row)}
                     {onEdit && <Btn label="Modifier" icon="✏️" variant="ghost" sm onClick={() => onEdit(row)} />}
-                    {onDelete && <Btn label="Suppr." icon="🗑️" variant="danger" sm onClick={() => { if (window.confirm("Confirmer la suppression ?")) onDelete(row.id); }} />}
+                    {onDelete && <Btn label="Suppr." icon="🗑️" variant="danger" sm onClick={() => { if (window.confirm ? window.confirm("Confirmer la suppression ?") : true) onDelete(row.id); }} />}
                   </div>
                 </td>
               )}
@@ -654,6 +744,130 @@ const CarteAdherent = ({ personne, config, cotisations }) => {
   );
 };
 
+const PanneauRecuperation = ({ onClose, onRestore, showToastFn }) => {
+const [loading, setLoading] = useState(false);
+const [backups, setBackups] = useState([]);
+const [msg, setMsg] = useState('');
+
+useEffect(() => {
+  let annule = false;
+  const charger = async () => {
+    setLoading(true);
+    let liste = [];
+    // 1. Sauvegardes locales (.exe)
+    try {
+      if (window.electronAPI?.listBackups) {
+        const loc = await window.electronAPI.listBackups();
+        if (loc?.length) liste = [...liste, ...loc.map(b => ({ ...b, source: 'local' }))];
+      }
+    } catch {}
+    // 2. Sauvegardes Railway
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 6000);
+      const r = await fetch(SERVER_RAILWAY + '/api/backups', { signal: ctrl.signal });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.backups?.length) liste = [...liste, ...j.backups.map(b => ({ ...b, source: 'railway' }))];
+      }
+    } catch {}
+    if (!annule) {
+      liste.sort((a, b) => new Date(b.date) - new Date(a.date));
+      setBackups(liste);
+      setMsg(liste.length === 0 ? 'Aucune sauvegarde trouvée.' : '');
+      setLoading(false);
+    }
+  };
+  charger();
+  return () => { annule = true; };
+}, []);
+
+const restaurer = async (b) => {
+  if (window.confirm && !window.confirm('Restaurer cette sauvegarde ?\n\nVos données actuelles seront remplacées.')) return;
+  try {
+    let raw = null;
+    if (b.source === 'railway') {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 8000);
+      const r = await fetch(SERVER_RAILWAY + '/api/backups/' + b.nom, { signal: ctrl.signal });
+      if (r.ok) { const j = await r.json(); if (j.data) raw = JSON.stringify(j.data); }
+    } else {
+      raw = await window.electronAPI?.restoreBackup(b.path);
+    }
+    if (raw) {
+      onRestore(raw);
+      onClose();
+      showToastFn('✅ Données restaurées !');
+    } else {
+      showToastFn('❌ Fichier illisible', 'error');
+    }
+  } catch (e) { showToastFn('❌ Erreur : ' + e.message, 'error'); }
+};
+
+const restaurerFichier = async () => {
+  const raw = await window.electronAPI?.restoreData();
+  if (raw) { onRestore(raw); onClose(); showToastFn('✅ Restauré depuis fichier !'); }
+  else showToastFn('❌ Aucun fichier sélectionné', 'error');
+};
+
+return (
+  <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.55)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <div style={{ background: '#fff', borderRadius: 16, padding: 28, width: 'min(580px,92vw)', maxHeight: '82vh', overflowY: 'auto', boxShadow: '0 8px 40px rgba(0,0,0,.3)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+        <h3 style={{ fontSize: 17, fontWeight: 800, color: '#1a2e4a', margin: 0 }}>🔄 Récupération des données</h3>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: '#888' }}>✕</button>
+      </div>
+      <div style={{ background: '#fffbe6', borderRadius: 8, padding: '9px 13px', marginBottom: 16, fontSize: 13, color: '#b45309', borderLeft: '3px solid #d97706' }}>
+        ⚠️ Sauvegardes automatiques toutes les heures (local + Railway).
+      </div>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 32, color: '#888' }}>⏳ Chargement des sauvegardes...</div>
+      ) : msg ? (
+        <div style={{ textAlign: 'center', padding: 32, color: '#888' }}>
+          <div style={{ fontSize: 36, marginBottom: 10 }}>📂</div>
+          <div style={{ fontWeight: 600 }}>{msg}</div>
+          <div style={{ fontSize: 12, marginTop: 6, color: '#aaa' }}>Les sauvegardes apparaissent après 1h d'utilisation.</div>
+        </div>
+      ) : (
+        <div>
+          <p style={{ fontSize: 13, color: '#888', marginBottom: 10 }}>{backups.length} sauvegarde(s) disponible(s)</p>
+          {backups.map((b, i) => {
+            const d = new Date(b.date);
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 13px', borderRadius: 9, border: '1px solid #e5e7eb', marginBottom: 7, background: i === 0 ? '#eff6ff' : '#fff' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1f2937', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {i === 0 && <span style={{ background: '#10b981', color: '#fff', fontSize: 10, padding: '1px 6px', borderRadius: 20 }}>RÉCENTE</span>}
+                    <span style={{ background: b.source === 'local' ? '#3b82f6' : '#f59e0b', color: '#fff', fontSize: 10, padding: '1px 6px', borderRadius: 20 }}>
+                      {b.source === 'local' ? '💻 Local' : '🚂 Railway'}
+                    </span>
+                    {d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                    {d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    {b.size ? ' · ' + Math.round(b.size / 1024) + ' Ko' : ''}
+                  </div>
+                </div>
+                <button onClick={() => restaurer(b)} style={{ padding: '6px 14px', borderRadius: 7, background: i === 0 ? '#10b981' : '#3b82f6', color: '#fff', border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                  ↺ Restaurer
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div style={{ marginTop: 14, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+        <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 9px' }}>Restaurer depuis un fichier JSON :</p>
+        <button onClick={restaurerFichier} style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#374151', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
+          📂 Ouvrir un fichier .json
+        </button>
+      </div>
+    </div>
+  </div>
+);
+};
+
+
 // ═══════════════════════════════════════════════════════════════════
 // MODULE 1 — DASHBOARD
 // ═══════════════════════════════════════════════════════════════════
@@ -674,163 +888,9 @@ const Dashboard = ({ data, setPage }) => {
   const votesOuverts = (data.votes || []).filter(v => v.statut === "En cours").length;
   const donTotal = (data.dons || []).reduce((s, d) => s + Number(d.montant), 0);
 
-  // ── Panneau récupération des sauvegardes automatiques ──────────────────────
-  const PanneauRecuperation = () => {
-    const [loading, setLoading] = useState(false);
-    const [backups, setBackups] = useState([]);
-    const [erreur, setErreur] = useState('');
-
-    // Charger toutes les sauvegardes au montage
-    useEffect(() => {
-      const charger = async () => {
-        setLoading(true);
-        setErreur('');
-        let liste = [];
-
-        // 1. Sauvegardes locales depuis le .exe
-        try {
-          if (window.electronAPI?.listBackups) {
-            const local = await window.electronAPI.listBackups();
-            if (local?.length) {
-              liste = [...liste, ...local.map(b => ({ ...b, source: 'local' }))];
-            }
-          }
-        } catch (e) { console.warn('listBackups local:', e); }
-
-        // 2. Sauvegardes depuis Railway
-        try {
-          const r = await fetch(`${SERVER_RAILWAY}/api/backups`, { signal: AbortSignal.timeout(6000) });
-          if (r.ok) {
-            const j = await r.json();
-            if (j.ok && j.backups?.length) {
-              liste = [...liste, ...j.backups.map(b => ({ ...b, source: 'railway' }))];
-            }
-          }
-        } catch {}
-
-        // Trier par date décroissante et dédupliquer
-        liste.sort((a, b) => new Date(b.date) - new Date(a.date));
-        setBackups(liste);
-        if (liste.length === 0) {
-          setErreur('Aucune sauvegarde trouvée. Les sauvegardes sont créées automatiquement toutes les heures.');
-        }
-        setLoading(false);
-      };
-      charger();
-    }, []);
-
-    const restaurer = async (b) => {
-      if (!window.confirm(
-        `Restaurer la sauvegarde du ${new Date(b.date).toLocaleString('fr-FR')} ?\n\nCela remplacera vos données actuelles.`
-      )) return;
-      try {
-        let raw = null;
-        if (b.source === 'railway') {
-          const r = await fetch(`${SERVER_RAILWAY}/api/backups/${b.nom}`, { signal: AbortSignal.timeout(8000) });
-          if (r.ok) { const j = await r.json(); if (j.ok && j.data) raw = JSON.stringify(j.data); }
-        } else {
-          raw = await window.electronAPI?.restoreBackup(b.path);
-        }
-        if (raw) {
-          const restored = mergeWithDefault(JSON.parse(raw));
-          setDataRaw(restored);
-          saveData(restored);
-          setShowRecuperation(false);
-          showToast('✅ Données restaurées avec succès !');
-        } else {
-          showToast('❌ Impossible de lire cette sauvegarde', 'error');
-        }
-      } catch (e) {
-        showToast(`❌ Erreur : ${e.message}`, 'error');
-      }
-    };
-
-    return (
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ background: T.white, borderRadius: 16, padding: 28, width: 'min(600px,90vw)', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 8px 40px rgba(0,0,0,.3)' }}>
-
-          {/* En-tête */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h3 style={{ fontFamily: FS.S, fontSize: 18, fontWeight: 800, color: T.navy, margin: 0 }}>🔄 Récupération des données</h3>
-            <button onClick={() => setShowRecuperation(false)} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: T.muted }}>✕</button>
-          </div>
-
-          {/* Info */}
-          <div style={{ background: T.yellow, borderRadius: 9, padding: '10px 14px', marginBottom: 18, fontSize: 13, color: T.amber, borderLeft: `3px solid ${T.amber}` }}>
-            ⚠️ ASHOID sauvegarde vos données automatiquement toutes les heures (local + Railway).
-          </div>
-
-          {/* Contenu */}
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: 30, color: T.muted, fontSize: 14 }}>
-              ⏳ Chargement des sauvegardes...
-            </div>
-          ) : erreur ? (
-            <div style={{ textAlign: 'center', padding: 30, color: T.muted }}>
-              <div style={{ fontSize: 40, marginBottom: 10 }}>📂</div>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Aucune sauvegarde disponible</div>
-              <div style={{ fontSize: 12 }}>{erreur}</div>
-            </div>
-          ) : (
-            <div>
-              <p style={{ fontSize: 13, color: T.muted, marginBottom: 12 }}>
-                {backups.length} sauvegarde(s) — 48 dernières heures
-              </p>
-              {backups.map((b, i) => {
-                const date = new Date(b.date);
-                const taille = b.size ? `${Math.round(b.size / 1024)} Ko` : '?';
-                const isLocal = b.source === 'local';
-                return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 9, border: `1px solid ${T.border}`, marginBottom: 8, background: i === 0 ? T.sky : T.white }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: T.dark, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        {i === 0 && <span style={{ background: T.emerald, color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20 }}>PLUS RÉCENTE</span>}
-                        <span style={{ background: isLocal ? T.blue : T.amber, color: '#fff', fontSize: 10, padding: '2px 6px', borderRadius: 20 }}>
-                          {isLocal ? '💻 Local' : '🚂 Railway'}
-                        </span>
-                        {date.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' })}
-                      </div>
-                      <div style={{ fontSize: 12, color: T.muted, marginTop: 3 }}>
-                        {date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} · {taille}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => restaurer(b)}
-                      style={{ padding: '7px 16px', borderRadius: 8, background: i === 0 ? T.emerald : T.blue, color: '#fff', border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                      ↺ Restaurer
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Fichier manuel */}
-          <div style={{ marginTop: 16, borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
-            <p style={{ fontSize: 12, color: T.muted, margin: '0 0 10px' }}>Ou restaurer depuis un fichier JSON :</p>
-            <Btn label="📂 Ouvrir un fichier de sauvegarde" variant="ghost" onClick={async () => {
-              const raw = await window.electronAPI?.restoreData();
-              if (raw) {
-                const restored = mergeWithDefault(JSON.parse(raw));
-                setDataRaw(restored);
-                saveData(restored);
-                setShowRecuperation(false);
-                showToast('✅ Données restaurées !');
-              } else {
-                showToast('❌ Aucun fichier sélectionné', 'error');
-              }
-            }} />
-          </div>
-
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="fade-up">
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
-        <KPI label="Membres" value={data.personnes.length} icon="👥" color={T.blue} onClick={() => setPage("recensement")} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }} className="kpi-grid">
         <KPI label="Taux cotisation" value={`${taux}%`} icon="📊" color={taux >= 70 ? T.emerald : T.amber} />
         <KPI label="Solde trésorerie" value={`${solde} €`} icon="🏦" color={solde >= 0 ? T.emerald : T.red} />
         <KPI label="Alertes actives" value={alertesNL} icon="🔔" color={alertesNL > 0 ? T.red : T.emerald} onClick={() => setPage("alertes")} />
@@ -1197,7 +1257,7 @@ const Recensement = ({ data, setData, showToast }) => {
           </div>
           <div style={{ textAlign: "center", marginBottom: 14, color: T.muted, fontSize: 12 }}>N° Carte : <strong style={{ color: T.navy }}>{carteModal.numero_carte || "Non attribué"}</strong></div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => window.print()} />
+            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => { try { window.print(); } catch(e) { alert('Utilisez Ctrl+P pour imprimer'); } }} />
             <Btn label="Fermer" variant="ghost" onClick={() => setCarteModal(null)} />
           </div>
         </Modal>
@@ -1350,123 +1410,16 @@ const Recensement = ({ data, setData, showToast }) => {
 // ═══════════════════════════════════════════════════════════════════
 // MODULE 3 — COTISATIONS
 // ═══════════════════════════════════════════════════════════════════
-// ── Import Cotisations depuis Excel/CSV/JSON ──────────────────────────────────
-const COT_COLS = [
-  {key:"adherent",label:"Adhérent (Prénom Nom ou N°)"},{key:"prenom",label:"Prénom"},{key:"nom",label:"Nom"},
-  {key:"id_personne",label:"N° Adhérent"},{key:"mois",label:"Mois"},{key:"annee",label:"Année"},
-  {key:"montant",label:"Montant"},{key:"mode_paiement",label:"Mode paiement"},
-  {key:"date_paiement",label:"Date paiement"},{key:"reference",label:"Référence"},
-];
-
-const exportXLSX_cotisations = async (cotisations, personnes) => {
-  const XL = await loadXLSX();
-  const headers = ["N° Adhérent","Prénom","Nom","Mois","Année","Montant","Mode paiement","Date paiement","Référence"];
-  const rows = cotisations.map(c => {
-    const p = personnes.find(x => x.id === c.id_personne);
-    return [p?.id_personne||"",p?.prenom||"",p?.nom||"",c.mois,c.annee,c.montant,c.mode_paiement||"",c.date_paiement||"",c.reference||""];
-  });
-  const ws = XL.utils.aoa_to_sheet([headers,...rows]);
-  ws["!cols"] = headers.map(h=>({wch:Math.max(h.length,14)}));
-  const wb = XL.utils.book_new();
-  XL.utils.book_append_sheet(wb,ws,"Cotisations");
-  XL.writeFile(wb,`cotisations_${new Date().toISOString().slice(0,10)}.xlsx`);
-};
-
-const importCotisationsFromFile = async (file, personnes, existingCotisations, montantDefaut, onImport) => {
-  const ext = file.name.split(".").pop().toLowerCase();
-
-  // ── JSON ─────────────────────────────────────────────────────────────────
-  if (ext === "json") {
-    const text = await file.text();
-    let parsed;
-    try { parsed = JSON.parse(text); } catch { alert("Fichier JSON invalide."); return; }
-    const arr = Array.isArray(parsed) ? parsed : parsed.cotisations || [];
-    if (!arr.length) { alert("Aucune cotisation trouvée dans le JSON."); return; }
-    onImport(arr.map((c,i)=>({...c, id: Date.now()+i, montant: Number(c.montant)||montantDefaut})));
-    return;
-  }
-
-  // ── XLSX / CSV ────────────────────────────────────────────────────────────
-  const XL = await loadXLSX();
-  const buf = await file.arrayBuffer();
-  const wb = XL.read(buf, {type:"array"});
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XL.utils.sheet_to_json(ws, {header:1});
-  if (rows.length < 2) { alert("Fichier vide ou format incorrect."); return; }
-
-  const headers = rows[0].map(h => String(h||"").trim().toLowerCase());
-  const findCol = (...names) => { for (const n of names) { const i = headers.findIndex(h=>h===n||h.includes(n)); if (i>=0) return i; } return -1; };
-  const colPrenom   = findCol("prénom","prenom","firstname","first name");
-  const colNom      = findCol("nom","name","lastname","last name");
-  const colId       = findCol("n° adhérent","id_personne","numéro","numero","id");
-  const colAdherent = findCol("adhérent","adherent");
-  const colMois     = findCol("mois","month");
-  const colAnnee    = findCol("année","annee","year");
-  const colMontant  = findCol("montant","amount","montant (€)");
-  const colMode     = findCol("mode paiement","mode","payment");
-  const colDate     = findCol("date paiement","date");
-  const colRef      = findCol("référence","reference","ref");
-
-  const imported = [];
-  const nonTrouves = [];
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row || row.every(c=>!c)) continue;
-    const g = idx => idx>=0 ? String(row[idx]||"").trim() : "";
-
-    // Trouver la personne
-    let personne = null;
-    const idVal = g(colId);
-    const prenomVal = g(colPrenom);
-    const nomVal = g(colNom);
-    const adherentVal = g(colAdherent);
-
-    if (idVal) personne = personnes.find(p=>p.id_personne===idVal||String(p.id)===idVal);
-    if (!personne && prenomVal && nomVal) personne = personnes.find(p=>p.prenom.toLowerCase()===prenomVal.toLowerCase()&&p.nom.toLowerCase()===nomVal.toLowerCase());
-    if (!personne && adherentVal) {
-      const parts = adherentVal.split(" ");
-      if (parts.length >= 2) personne = personnes.find(p=>`${p.prenom} ${p.nom}`.toLowerCase()===adherentVal.toLowerCase());
-      if (!personne) personne = personnes.find(p=>p.id_personne===adherentVal);
-    }
-
-    if (!personne) { nonTrouves.push(adherentVal||`${prenomVal} ${nomVal}`||`Ligne ${i+1}`); continue; }
-
-    const mois = g(colMois);
-    const annee = Number(g(colAnnee)) || new Date().getFullYear();
-    const montant = Number(g(colMontant)) || montantDefaut;
-    const mode = g(colMode);
-    const date = g(colDate);
-    const ref = g(colRef) || `IMP-${String(imported.length+1).padStart(3,"0")}`;
-
-    if (!mois || !MOIS.includes(mois)) { nonTrouves.push(`Mois invalide: ${mois} (ligne ${i+1})`); continue; }
-    // Vérifier doublon
-    if (existingCotisations.find(c=>c.id_personne===personne.id&&c.mois===mois&&c.annee===annee)) continue;
-    imported.push({ id: Date.now()+i, id_personne: personne.id, mois, annee, montant, mode_paiement: mode, date_paiement: date, reference: ref, preuve_base64: "", preuve_nom: "", preuve_type: "" });
-  }
-
-  if (imported.length === 0 && nonTrouves.length === 0) { alert("Aucune cotisation valide trouvée."); return; }
-  if (nonTrouves.length > 0) {
-    const msg = `⚠️ ${nonTrouves.length} ligne(s) non importée(s) :\n${nonTrouves.slice(0,5).join("\n")}${nonTrouves.length>5?"\n...":""}`;
-    if (imported.length === 0) { alert(msg + "\n\nAucune cotisation importée."); return; }
-    if (!window.confirm(msg + `\n\n${imported.length} cotisation(s) valide(s) seront importées. Continuer ?`)) return;
-  }
-  onImport(imported);
-};
-
 const Cotisations = ({ data, setData, showToast }) => {
   const annee = new Date().getFullYear();
   const ef = { id_personne: "", mois: "", annee: String(annee), montant: String(data.config?.montant_cotisation || 10), mode_paiement: "", date_paiement: today(), reference: "", preuve_base64: "", preuve_nom: "", preuve_type: "" };
   const preuveRef = useRef();
-  const importCotRef = useRef();
   const [form, setForm] = useState(ef);
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState(null);
   const [onglet, setOnglet] = useState("liste");
   const [anneeVue, setAnneeVue] = useState(annee);
   const [preuveOuverte, setPreuveOuverte] = useState(null);
-  const [importCotModal, setImportCotModal] = useState(false);
-  const [syncModal, setSyncModal] = useState(false);
-  const [syncStatus, setSyncStatus] = useState({ railway: null, render: null, checking: false });
   // ── Filtres et recherche ──────────────────────────────────────────────────
   const [searchText, setSearchText] = useState("");
   const [filterMois, setFilterMois] = useState("");
@@ -1521,8 +1474,6 @@ const Cotisations = ({ data, setData, showToast }) => {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
         <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>💳 Cotisations</h2><p style={{ color: T.muted, fontSize: 13 }}>{data.cotisations.length} paiement(s) enregistré(s)</p></div>
         <div style={{ display: "flex", gap: 8 }}>
-          <Btn label="📥 Importer" variant="ghost" onClick={() => setImportCotModal(true)} />
-          <Btn label="📤 XLSX" variant="teal" onClick={() => exportXLSX_cotisations(data.cotisations, data.personnes).catch(e=>alert("Erreur: "+e))} />
           <Btn label="📤 CSV" variant="ghost" onClick={() => exportCSV(data.cotisations.map(c => { const p = data.personnes.find(x => x.id === c.id_personne); return { ...c, adherent: p ? `${p.prenom} ${p.nom}` : c.id_personne }; }), [{ key: "adherent", label: "Adhérent" }, { key: "mois", label: "Mois" }, { key: "annee", label: "Année" }, { key: "montant", label: "Montant" }, { key: "mode_paiement", label: "Mode" }, { key: "date_paiement", label: "Date" }, { key: "reference", label: "Référence" }], "cotisations")} />
           <Btn label="➕ Saisir" variant="success" onClick={() => { setEditId(null); setForm({ ...ef, montant: String(data.config?.montant_cotisation || 10) }); setModal(true); }} />
         </div>
@@ -2006,81 +1957,6 @@ const Cotisations = ({ data, setData, showToast }) => {
           <ModalFooter onCancel={() => { setModal(false); setEditId(null); }} onSave={save} saveLabel={editId ? "💾 Modifier" : "💾 Enregistrer"} />
         </Modal>
       )}
-      {/* ══ MODAL IMPORT COTISATIONS ══ */}
-      {importCotModal && (
-        <Modal title="📥 Importer des cotisations (Excel / CSV / JSON)" onClose={() => setImportCotModal(false)} wide>
-          <div style={{ padding: "10px 14px", background: T.sky, borderRadius: 9, marginBottom: 14, fontSize: 13, color: T.blue }}>
-            <strong>Formats acceptés :</strong> .xlsx, .xls, .csv, .json<br/>
-            <strong>Colonnes reconnues :</strong> N° Adhérent, Prénom, Nom, Mois (ex: Janvier), Année, Montant, Mode paiement, Date paiement, Référence<br/>
-            Les doublons (même adhérent + même mois + même année) sont automatiquement ignorés.<br/>
-            <a href="#" onClick={async e => {
-              e.preventDefault();
-              const XL = await loadXLSX();
-              const ws = XL.utils.aoa_to_sheet([
-                ["N° Adhérent","Prénom","Nom","Mois","Année","Montant","Mode paiement","Date paiement","Référence"],
-                ["H001","Ahmed","Abdallah","Janvier",2025,10,"Virement","2025-01-10","REC-001"],
-              ]);
-              ws["!cols"] = [14,12,12,10,8,8,14,14,12].map(w=>({wch:w}));
-              const wb = XL.utils.book_new();
-              XL.utils.book_append_sheet(wb,ws,"Cotisations");
-              XL.writeFile(wb,"modele_import_cotisations.xlsx");
-            }} style={{ color: T.blue, fontWeight: 700, display: "inline-block", marginTop: 6 }}>⬇️ Télécharger le modèle Excel</a>
-          </div>
-
-          {/* Zone de dépôt */}
-          <div
-            style={{ border: `2px dashed ${T.border}`, borderRadius: 12, padding: 32, textAlign: "center", cursor: "pointer", background: T.light, transition: "all .15s" }}
-            onClick={() => importCotRef.current.click()}
-            onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = T.blue; e.currentTarget.style.background = T.sky; }}
-            onDragLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.background = T.light; }}
-            onDrop={async e => {
-              e.preventDefault();
-              e.currentTarget.style.borderColor = T.border;
-              e.currentTarget.style.background = T.light;
-              const file = e.dataTransfer.files[0];
-              if (!file) return;
-              await importCotisationsFromFile(file, data.personnes, data.cotisations, data.config?.montant_cotisation||10, imported => {
-                const finEntries = imported.map(c => {
-                  const p = data.personnes.find(x=>x.id===c.id_personne);
-                  return { id: genId()+Math.random(), type_operation:"Recette", categorie:"Cotisation", montant: c.montant, date_operation: c.date_paiement||today(), description:`Cotisation ${c.mois} ${c.annee} — ${p?p.prenom+" "+p.nom:""}`, mode_paiement: c.mode_paiement||"", annee: c.annee, auto_generated:true };
-                });
-                setData(d => ({ ...d, cotisations: [...d.cotisations, ...imported], finances: [...d.finances, ...finEntries] }));
-                showToast(`✅ ${imported.length} cotisation(s) importée(s) et ajoutées aux finances !`);
-                setImportCotModal(false);
-              });
-            }}>
-            <div style={{ fontSize: 44, marginBottom: 10 }}>📂</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: T.dark, marginBottom: 4 }}>Glisser-déposer ou cliquer pour choisir</div>
-            <div style={{ fontSize: 12, color: T.muted }}>Excel (.xlsx, .xls) · CSV · JSON</div>
-          </div>
-          <input
-            ref={importCotRef}
-            type="file"
-            accept=".xlsx,.xls,.csv,.json"
-            style={{ display: "none" }}
-            onChange={async e => {
-              const file = e.target.files[0]; if (!file) return;
-              await importCotisationsFromFile(file, data.personnes, data.cotisations, data.config?.montant_cotisation||10, imported => {
-                const finEntries = imported.map(c => {
-                  const p = data.personnes.find(x=>x.id===c.id_personne);
-                  return { id: genId()+Math.random(), type_operation:"Recette", categorie:"Cotisation", montant: c.montant, date_operation: c.date_paiement||today(), description:`Cotisation ${c.mois} ${c.annee} — ${p?p.prenom+" "+p.nom:""}`, mode_paiement: c.mode_paiement||"", annee: c.annee, auto_generated:true };
-                });
-                setData(d => ({ ...d, cotisations: [...d.cotisations, ...imported], finances: [...d.finances, ...finEntries] }));
-                showToast(`✅ ${imported.length} cotisation(s) importée(s) !`);
-                setImportCotModal(false);
-              });
-              e.target.value = "";
-            }}
-          />
-
-          <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 12, color: T.muted }}>
-              💡 Les cotisations importées sont automatiquement ajoutées aux recettes financières.
-            </div>
-            <Btn label="Fermer" variant="ghost" onClick={() => setImportCotModal(false)} />
-          </div>
-        </Modal>
-      )}
       {preuveOuverte && <PrueueViewer src={preuveOuverte.src} nom={preuveOuverte.nom} onClose={() => setPreuveOuverte(null)} />}
     </div>
   );
@@ -2511,7 +2387,7 @@ const Budget = ({ data, setData, showToast }) => {
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Chip text={b.taux > 90 ? "⚠️ Alerte" : b.taux > 50 ? "En cours" : "✓ OK"} variant={b.taux > 90 ? "red" : b.taux > 50 ? "amber" : "green"} />
                 <Btn label="✏️" variant="ghost" sm onClick={() => { setForm({ annee: String(b.annee), poste: b.poste, montant_prevu: String(b.montant_prevu) }); setEditId(b.id); setModal(true); }} />
-                <Btn label="🗑️" variant="danger" sm onClick={() => { if (window.confirm("Supprimer ?")) { setData(d => ({ ...d, budget: d.budget.filter(x => x.id !== b.id) })); showToast("Poste supprimé.", "error"); } }} />
+                <Btn label="🗑️" variant="danger" sm onClick={() => { if (!window.confirm || window.confirm("Supprimer ?")) { setData(d => ({ ...d, budget: d.budget.filter(x => x.id !== b.id) })); showToast("Poste supprimé.", "error"); } }} />
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -2690,7 +2566,7 @@ const Reunions = ({ data, setData, showToast, user }) => {
             </div>
           </div>
           <div style={{ marginTop: 14, display: "flex", justifyContent: "center", gap: 10 }}>
-            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => window.print()} />
+            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => { try { window.print(); } catch(e) { alert('Utilisez Ctrl+P pour imprimer'); } }} />
             <Btn label="Fermer" variant="ghost" onClick={() => setPvModal(null)} />
           </div>
         </Modal>
@@ -2766,7 +2642,7 @@ const Projets = ({ data, setData, showToast }) => {
               </div>
               <div style={{ display: "flex", gap: 6, marginLeft: 14 }}>
                 <Btn label="✏️" variant="ghost" sm onClick={() => { setForm({ titre: p.titre, description: p.description || "", budget: p.budget || "", statut: p.statut, date_debut: p.date_debut || "", responsable: p.responsable || "", avancement: p.avancement || 0 }); setEd(p.id); setModal(true); }} />
-                <Btn label="🗑️" variant="danger" sm onClick={() => { if (window.confirm("Supprimer ?")) { setData(d => ({ ...d, projets: d.projets.filter(x => x.id !== p.id) })); showToast("Projet supprimé.", "error"); } }} />
+                <Btn label="🗑️" variant="danger" sm onClick={() => { if (!window.confirm || window.confirm("Supprimer ?")) { setData(d => ({ ...d, projets: d.projets.filter(x => x.id !== p.id) })); showToast("Projet supprimé.", "error"); } }} />
               </div>
             </div>
           </Card>
@@ -2870,7 +2746,7 @@ const VotesAssemblees = ({ data, setData, showToast, user }) => {
                   </div>
                   {!isReadOnly(user) && <div style={{ display: "flex", gap: 6 }}>
                     <Btn label="✏️" variant="ghost" sm onClick={() => { setEditV(v.id); setFormV({ titre: v.titre, description: v.description || "", date: v.date, statut: v.statut, pour: v.pour, contre: v.contre, abstention: v.abstention, quorum: v.quorum, resultat: v.resultat || "" }); setModalV(true); }} />
-                    <Btn label="🗑️" variant="danger" sm onClick={() => { if (window.confirm("Supprimer ?")) { setData(d => ({ ...d, votes: d.votes.filter(x => x.id !== v.id) })); showToast("Vote supprimé.", "error"); } }} />
+                    <Btn label="🗑️" variant="danger" sm onClick={() => { if (!window.confirm || window.confirm("Supprimer ?")) { setData(d => ({ ...d, votes: d.votes.filter(x => x.id !== v.id) })); showToast("Vote supprimé.", "error"); } }} />
                   </div>}
                 </div>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
@@ -2912,7 +2788,7 @@ const VotesAssemblees = ({ data, setData, showToast, user }) => {
                 <div style={{ display: "flex", gap: 6, marginLeft: 14 }}>
                   <Btn label="👁️ PV" variant="ghost" sm onClick={() => setPvModal(ag)} />
                   {!isReadOnly(user) && <Btn label="✏️" variant="ghost" sm onClick={() => { setEditA(ag.id); setFormA({ titre: ag.titre, date: ag.date, lieu: ag.lieu || "", type: ag.type || "Ordinaire", ordre_du_jour: ag.ordre_du_jour || "", participants: ag.participants || 0, quorum_requis: ag.quorum_requis || 0, statut: ag.statut, compte_rendu: ag.compte_rendu || "", pv_signe: ag.pv_signe || false }); setModalA(true); }} />}
-                  {!isReadOnly(user) && <Btn label="🗑️" variant="danger" sm onClick={() => { if (window.confirm("Supprimer ?")) { setData(d => ({ ...d, assemblee: d.assemblee.filter(x => x.id !== ag.id) })); showToast("AG supprimée.", "error"); } }} />}
+                  {!isReadOnly(user) && <Btn label="🗑️" variant="danger" sm onClick={() => { if (!window.confirm || window.confirm("Supprimer ?")) { setData(d => ({ ...d, assemblee: d.assemblee.filter(x => x.id !== ag.id) })); showToast("AG supprimée.", "error"); } }} />}
                 </div>
               </div>
             </Card>
@@ -2982,7 +2858,7 @@ const VotesAssemblees = ({ data, setData, showToast, user }) => {
             </div>
           </div>
           <div style={{ marginTop: 14, display: "flex", justifyContent: "center", gap: 10 }}>
-            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => window.print()} />
+            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => { try { window.print(); } catch(e) { alert('Utilisez Ctrl+P pour imprimer'); } }} />
             <Btn label="Fermer" variant="ghost" onClick={() => setPvModal(null)} />
           </div>
         </Modal>
@@ -3034,7 +2910,7 @@ const Documents = ({ data, setData, showToast }) => {
               <div style={{ display: "flex", gap: 5 }}>
                 {doc.fichier_base64 && <Btn label="👁️" title="Voir" variant="teal" sm onClick={() => setViewDoc(doc)} />}
                 <Btn label="✏️" variant="ghost" sm onClick={() => { setEditId(doc.id); setForm({ titre: doc.titre, categorie: doc.categorie, date_ajout: doc.date_ajout, description: doc.description || "", fichier_base64: doc.fichier_base64 || "", fichier_nom: doc.fichier_nom || "", fichier_type: doc.fichier_type || "" }); setModal(true); }} />
-                <Btn label="🗑️" variant="danger" sm onClick={() => { if (window.confirm("Supprimer ?")) { setData(d => ({ ...d, documents: d.documents.filter(x => x.id !== doc.id) })); showToast("Document supprimé.", "error"); } }} />
+                <Btn label="🗑️" variant="danger" sm onClick={() => { if (!window.confirm || window.confirm("Supprimer ?")) { setData(d => ({ ...d, documents: d.documents.filter(x => x.id !== doc.id) })); showToast("Document supprimé.", "error"); } }} />
               </div>
             </div>
             <div style={{ fontWeight: 700, color: T.dark, fontSize: 13, marginBottom: 5 }}>{doc.titre}</div>
@@ -3294,18 +3170,6 @@ const Alertes = ({ data, setData, showToast }) => {
 // ═══════════════════════════════════════════════════════════════════
 const SecuriteParametres = ({ data, setData, showToast }) => {
   const [tab, setTab] = useState("securite");
-  const [statuts, setStatuts] = useState({ railway: null, render: null, checking: false });
-  const verifierServeurs = async () => {
-    setStatuts(s => ({...s, checking: true}));
-    const [r1, r2] = await Promise.allSettled([
-      fetch(`${SERVER_RENDER}/api/health`, {signal: AbortSignal.timeout(10000)}).then(r=>r.ok ? "ok" : "err").catch(()=>"off"),
-    ]);
-    setStatuts({
-      railway: r1.status==="fulfilled" ? r1.value : "off",
-      render:  r2.status==="fulfilled" ? r2.value : "off",
-      checking: false
-    });
-  };
   // Sécurité
   const eu = { login: "", mot_de_passe: "", role: "Lecture", nom: "", actif: true };
   const [formU, setFormU] = useState(eu);
@@ -3333,7 +3197,7 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
     showToast("Paramètres sauvegardés !");
   };
   const resetData = () => {
-    if (window.confirm("⚠️ Réinitialiser TOUTES les données ? Cette action est irréversible !")) {
+    if (!window.confirm || window.confirm("⚠️ Réinitialiser TOUTES les données ? Cette action est irréversible !")) {
       try { localStorage.removeItem(STORAGE_KEY); } catch { }
       window.location.reload();
     }
@@ -3421,31 +3285,6 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
               </div>
             </Card>
           </div>
-          {/* ── Statut des serveurs de synchronisation ── */}
-          <Card style={{ marginBottom: 16 }}>
-            <h4 style={{ fontFamily: FS.S, fontSize: 13, fontWeight: 700, color: T.navy, marginBottom: 12 }}>🌐 Serveurs de synchronisation</h4>
-            <div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-              {[
-                { label: "🚂 Railway (Principal)", url: SERVER_RAILWAY, st: statuts.railway },
-                { label: "☁️ Render (Miroir)", url: SERVER_RENDER, st: statuts.render },
-              ].map(({label, url, st}) => (
-                <div key={url} style={{ flex: "1 1 220px", padding: "10px 14px", borderRadius: 9, border: `1.5px solid ${st==="ok"?T.emerald:st==="err"||st==="off"?T.red:T.border}`, background: st==="ok"?T.mint:st==="err"||st==="off"?T.rose:T.light }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: T.dark, marginBottom: 3, display: "flex", alignItems: "center", gap: 6 }}>
-                    {label}
-                    {st==="ok" && <Chip text="✅ En ligne" variant="green" />}
-                    {(st==="err"||st==="off") && <Chip text="❌ Hors ligne" variant="red" />}
-                    {!st && <Chip text="— Non vérifié" variant="gray" />}
-                  </div>
-                  <div style={{ fontSize: 11, color: T.muted, wordBreak: "break-all" }}>{url}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Btn label={statuts.checking ? "⏳ Vérification…" : "🔍 Tester les serveurs"} variant="ghost" disabled={statuts.checking} onClick={verifierServeurs} />
-              <a href={SERVER_RAILWAY} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: T.blue, fontWeight: 600 }}>Ouvrir Railway ↗</a>
-              <a href={SERVER_RENDER} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: T.blue, fontWeight: 600 }}>Ouvrir Render ↗</a>
-            </div>
-          </Card>
           <Card>
             <h4 style={{ fontFamily: FS.S, fontSize: 13, fontWeight: 700, color: T.red, marginBottom: 10 }}>⚠️ Zone dangereuse</h4>
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -3940,7 +3779,7 @@ const Mediatheque = ({ data, setData, showToast, user }) => {
                   <Btn label="👁️" sm variant="teal" title="Voir" onClick={() => setLightbox(m)} />
                   {!isReadOnly(user) && <Btn label="✏️" sm variant="ghost" onClick={() => { setEditId(m.id); setForm({...ef,...m}); setModal(true); }} />}
                   {m.fichier_base64 && <Btn label="⬇️" sm variant="ghost" title="Télécharger" onClick={() => { const a=document.createElement("a");a.href=m.fichier_base64;a.download=m.fichier_nom||m.titre;a.click(); }} />}
-                  {!isReadOnly(user) && <Btn label="🗑️" sm variant="danger" onClick={() => { if(window.confirm("Supprimer ?")) { setData(d=>({...d,medias_galerie:(d.medias_galerie||[]).filter(x=>x.id!==m.id)})); showToast("Média supprimé.","error"); }}} />}
+                  {!isReadOnly(user) && <Btn label="🗑️" sm variant="danger" onClick={() => { if(!window.confirm || window.confirm("Supprimer ?")) { setData(d=>({...d,medias_galerie:(d.medias_galerie||[]).filter(x=>x.id!==m.id)})); showToast("Média supprimé.","error"); }}} />}
                 </div>
               </div>
             ))}
@@ -4030,7 +3869,304 @@ const Mediatheque = ({ data, setData, showToast, user }) => {
 // ═══════════════════════════════════════════════════════════════════
 // LOGIN
 // ═══════════════════════════════════════════════════════════════════
-const Login = ({ onLogin, users, onInscription }) => {
+// ═══════════════════════════════════════════════════════════════
+// RÉCUPÉRATION DE MOT DE PASSE
+// Par téléphone (SMS simulé) ou par email
+// ═══════════════════════════════════════════════════════════════
+const MotDePasseOublie = ({ users, setData, onBack, showToastFn }) => {
+  const ETAPES = { CHOIX: 'choix', TELEPHONE: 'telephone', EMAIL: 'email', CODE: 'code', NOUVEAU: 'nouveau', SUCCES: 'succes' };
+  const [etape, setEtape]       = useState(ETAPES.CHOIX);
+  const [methode, setMethode]   = useState('');
+  const [valeur, setValeur]     = useState('');
+  const [code, setCode]         = useState('');
+  const [codeGenere, setCodeGenere] = useState('');
+  const [userTrouve, setUserTrouve] = useState(null);
+  const [nouveauMdp, setNouveauMdp] = useState('');
+  const [nouveauMdp2, setNouveauMdp2] = useState('');
+  const [err, setErr]           = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [showMdp, setShowMdp]   = useState(false);
+
+  const genererCode = () => String(Math.floor(100000 + Math.random() * 900000));
+
+  const chercherParTelephone = () => {
+    setErr('');
+    const tel = valeur.trim().replace(/[\s\-\.\(\)]/g, '');
+    if (tel.length < 8) { setErr('Veuillez saisir votre numéro de téléphone complet.'); return; }
+    // Chercher dans utilisateurs ET dans personnes liées
+    let u = users.find(u =>
+      (u.telephone  || '').replace(/[\s\-\.\(\)]/g, '') === tel ||
+      (u.telephone2 || '').replace(/[\s\-\.\(\)]/g, '') === tel
+    );
+    if (!u && typeof setData !== 'undefined') {
+      // Chercher dans les personnes et trouver le compte lié
+      // (passé via props si disponible)
+    }
+    if (!u) { setErr('Aucun compte trouvé avec ce numéro. Vérifiez le format (+33...) ou contactez un administrateur.'); return; }
+    if (u.actif === false) { setErr('Ce compte est désactivé. Contactez un administrateur.'); return; }
+    const code = genererCode();
+    setCodeGenere(code);
+    setUserTrouve(u);
+    setLoading(true);
+    // Simulation envoi SMS (en production, connecter Twilio/OVH SMS)
+    setTimeout(() => {
+      setLoading(false);
+      setEtape(ETAPES.CODE);
+      // En dev, afficher le code dans la console
+      console.log('[ASHOID] Code SMS simulé:', code);
+      showToastFn && showToastFn('📱 Code envoyé au ' + tel.slice(0,-4) + '****');
+    }, 1500);
+  };
+
+  const chercherParEmail = () => {
+    setErr('');
+    const email = valeur.trim().toLowerCase();
+    if (!email || !email.includes('@') || !email.includes('.')) {
+      setErr('Veuillez saisir une adresse email valide (ex: prenom@domaine.fr).');
+      return;
+    }
+    const u = users.find(u => (u.email || '').toLowerCase() === email);
+    if (!u) { setErr('Aucun compte trouvé avec cet email. Vérifiez l\'orthographe ou utilisez le téléphone.'); return; }
+    if (u.actif === false) { setErr('Ce compte est désactivé. Contactez un administrateur.'); return; }
+    const code = genererCode();
+    setCodeGenere(code);
+    setUserTrouve(u);
+    setLoading(true);
+    // Simulation envoi email (en production, connecter SendGrid/Mailgun)
+    setTimeout(() => {
+      setLoading(false);
+      setEtape(ETAPES.CODE);
+      console.log('[ASHOID] Code email simulé:', code);
+      showToastFn && showToastFn('📧 Code envoyé à ' + email.slice(0,3) + '***@' + email.split('@')[1]);
+    }, 1500);
+  };
+
+  const verifierCode = () => {
+    setErr('');
+    if (!code.trim()) { setErr('Veuillez saisir le code reçu.'); return; }
+    if (code.trim() !== codeGenere) { setErr('Code incorrect. Vérifiez votre ' + (methode === 'telephone' ? 'SMS' : 'email') + '.'); return; }
+    setEtape(ETAPES.NOUVEAU);
+  };
+
+  const changerMotDePasse = () => {
+    setErr('');
+    if (!nouveauMdp || nouveauMdp.length < 6) { setErr('Le mot de passe doit contenir au moins 6 caractères.'); return; }
+    if (nouveauMdp !== nouveauMdp2) { setErr('Les deux mots de passe ne correspondent pas.'); return; }
+    // Mettre à jour dans les utilisateurs ET dans les personnes
+    setData(d => ({
+      ...d,
+      utilisateurs: (d.utilisateurs || []).map(u =>
+        u.id === userTrouve.id || u.login === userTrouve.login
+          ? { ...u, mot_de_passe: nouveauMdp, password: nouveauMdp }
+          : u
+      ),
+      personnes: (d.personnes || []).map(p =>
+        p.login === userTrouve.login
+          ? { ...p, mot_de_passe: nouveauMdp, password: nouveauMdp }
+          : p
+      )
+    }));
+    setEtape(ETAPES.SUCCES);
+    showToastFn && showToastFn('✅ Mot de passe modifié avec succès !');
+  };
+
+  const IS = { width:'100%', padding:'11px 14px', borderRadius:9, border:'1.5px solid #e5e7eb', fontSize:14, outline:'none', boxSizing:'border-box', fontFamily:'inherit' };
+
+  // ── Étape CHOIX ──────────────────────────────────────────────────────────
+  if (etape === ETAPES.CHOIX) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f6fa', fontFamily:'inherit' }}>
+      <div style={{ width:'min(420px,92vw)', background:'#fff', borderRadius:18, padding:36, boxShadow:'0 8px 40px rgba(0,0,0,.10)' }}>
+        <div style={{ textAlign:'center', marginBottom:28 }}>
+          <div style={{ width:64, height:64, borderRadius:'50%', background:'#eff6ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:28, margin:'0 auto 16px' }}>🔑</div>
+          <h2 style={{ fontSize:22, fontWeight:800, color:'#1a2e4a', margin:'0 0 8px' }}>Mot de passe oublié</h2>
+          <p style={{ color:'#6b7280', fontSize:13, margin:0 }}>Choisissez comment recevoir votre code de récupération</p>
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:12, marginBottom:24 }}>
+          <button onClick={() => { setMethode('telephone'); setEtape(ETAPES.TELEPHONE); setValeur(''); setErr(''); }}
+            style={{ display:'flex', alignItems:'center', gap:16, padding:'16px 20px', borderRadius:12, border:'2px solid #e5e7eb', background:'#fff', cursor:'pointer', textAlign:'left', transition:'all .2s' }}
+            onMouseEnter={e => e.currentTarget.style.borderColor='#3b82f6'}
+            onMouseLeave={e => e.currentTarget.style.borderColor='#e5e7eb'}>
+            <span style={{ fontSize:28 }}>📱</span>
+            <div>
+              <div style={{ fontWeight:700, fontSize:14, color:'#1f2937' }}>Par SMS (Téléphone)</div>
+              <div style={{ fontSize:12, color:'#9ca3af', marginTop:2 }}>Recevoir un code sur votre numéro enregistré</div>
+            </div>
+          </button>
+          <button onClick={() => { setMethode('email'); setEtape(ETAPES.EMAIL); setValeur(''); setErr(''); }}
+            style={{ display:'flex', alignItems:'center', gap:16, padding:'16px 20px', borderRadius:12, border:'2px solid #e5e7eb', background:'#fff', cursor:'pointer', textAlign:'left', transition:'all .2s' }}
+            onMouseEnter={e => e.currentTarget.style.borderColor='#3b82f6'}
+            onMouseLeave={e => e.currentTarget.style.borderColor='#e5e7eb'}>
+            <span style={{ fontSize:28 }}>📧</span>
+            <div>
+              <div style={{ fontWeight:700, fontSize:14, color:'#1f2937' }}>Par Email</div>
+              <div style={{ fontSize:12, color:'#9ca3af', marginTop:2 }}>Recevoir un code sur votre adresse email enregistrée</div>
+            </div>
+          </button>
+        </div>
+        <button onClick={onBack} style={{ width:'100%', padding:'11px', borderRadius:9, border:'1px solid #e5e7eb', background:'#fff', color:'#6b7280', fontSize:13, fontWeight:600, cursor:'pointer' }}>← Retour à la connexion</button>
+      </div>
+    </div>
+  );
+
+  // ── Étape TELEPHONE ───────────────────────────────────────────────────────
+  if (etape === ETAPES.TELEPHONE) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f6fa', fontFamily:'inherit' }}>
+      <div style={{ width:'min(420px,92vw)', background:'#fff', borderRadius:18, padding:36, boxShadow:'0 8px 40px rgba(0,0,0,.10)' }}>
+        <div style={{ textAlign:'center', marginBottom:24 }}>
+          <div style={{ width:56, height:56, borderRadius:'50%', background:'#eff6ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, margin:'0 auto 14px' }}>📱</div>
+          <h2 style={{ fontSize:20, fontWeight:800, color:'#1a2e4a', margin:'0 0 6px' }}>Récupération par SMS</h2>
+          <p style={{ color:'#6b7280', fontSize:13, margin:0 }}>Saisissez le numéro de téléphone associé à votre compte</p>
+        </div>
+        {err && <div style={{ background:'#fef2f2', color:'#dc2626', padding:'10px 14px', borderRadius:9, marginBottom:14, fontSize:13, fontWeight:500, borderLeft:'3px solid #dc2626' }}>⚠️ {err}</div>}
+        <div style={{ marginBottom:20 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:5 }}>Numéro de téléphone</label>
+          <input style={IS} value={valeur} onChange={e => { setValeur(e.target.value); setErr(''); }}
+            onKeyDown={e => e.key === 'Enter' && chercherParTelephone()}
+            placeholder="+33 6 12 34 56 78" type="tel" autoFocus />
+        </div>
+        <button onClick={chercherParTelephone} disabled={loading}
+          style={{ width:'100%', padding:'13px', background: loading ? '#93c5fd' : '#1a2e4a', color:'#fff', border:'none', borderRadius:9, fontSize:15, fontWeight:700, cursor: loading ? 'wait' : 'pointer', marginBottom:12 }}>
+          {loading ? '⏳ Envoi en cours...' : '📱 Envoyer le code SMS →'}
+        </button>
+        <button onClick={() => { setEtape(ETAPES.CHOIX); setErr(''); }} style={{ width:'100%', padding:'11px', borderRadius:9, border:'1px solid #e5e7eb', background:'#fff', color:'#6b7280', fontSize:13, fontWeight:600, cursor:'pointer' }}>← Choisir une autre méthode</button>
+      </div>
+    </div>
+  );
+
+  // ── Étape EMAIL ───────────────────────────────────────────────────────────
+  if (etape === ETAPES.EMAIL) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f6fa', fontFamily:'inherit' }}>
+      <div style={{ width:'min(420px,92vw)', background:'#fff', borderRadius:18, padding:36, boxShadow:'0 8px 40px rgba(0,0,0,.10)' }}>
+        <div style={{ textAlign:'center', marginBottom:24 }}>
+          <div style={{ width:56, height:56, borderRadius:'50%', background:'#eff6ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, margin:'0 auto 14px' }}>📧</div>
+          <h2 style={{ fontSize:20, fontWeight:800, color:'#1a2e4a', margin:'0 0 6px' }}>Récupération par Email</h2>
+          <p style={{ color:'#6b7280', fontSize:13, margin:0 }}>Saisissez l'adresse email associée à votre compte</p>
+        </div>
+        {err && <div style={{ background:'#fef2f2', color:'#dc2626', padding:'10px 14px', borderRadius:9, marginBottom:14, fontSize:13, fontWeight:500, borderLeft:'3px solid #dc2626' }}>⚠️ {err}</div>}
+        <div style={{ marginBottom:20 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:5 }}>Adresse email</label>
+          <input style={IS} value={valeur} onChange={e => { setValeur(e.target.value); setErr(''); }}
+            onKeyDown={e => e.key === 'Enter' && chercherParEmail()}
+            placeholder="votre@email.com" type="email" autoFocus />
+        </div>
+        <button onClick={chercherParEmail} disabled={loading}
+          style={{ width:'100%', padding:'13px', background: loading ? '#93c5fd' : '#1a2e4a', color:'#fff', border:'none', borderRadius:9, fontSize:15, fontWeight:700, cursor: loading ? 'wait' : 'pointer', marginBottom:12 }}>
+          {loading ? '⏳ Envoi en cours...' : '📧 Envoyer le code par email →'}
+        </button>
+        <button onClick={() => { setEtape(ETAPES.CHOIX); setErr(''); }} style={{ width:'100%', padding:'11px', borderRadius:9, border:'1px solid #e5e7eb', background:'#fff', color:'#6b7280', fontSize:13, fontWeight:600, cursor:'pointer' }}>← Choisir une autre méthode</button>
+      </div>
+    </div>
+  );
+
+  // ── Étape CODE ────────────────────────────────────────────────────────────
+  if (etape === ETAPES.CODE) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f6fa', fontFamily:'inherit' }}>
+      <div style={{ width:'min(420px,92vw)', background:'#fff', borderRadius:18, padding:36, boxShadow:'0 8px 40px rgba(0,0,0,.10)' }}>
+        <div style={{ textAlign:'center', marginBottom:24 }}>
+          <div style={{ width:56, height:56, borderRadius:'50%', background:'#f0fdf4', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, margin:'0 auto 14px' }}>🔢</div>
+          <h2 style={{ fontSize:20, fontWeight:800, color:'#1a2e4a', margin:'0 0 6px' }}>Saisir le code</h2>
+          <p style={{ color:'#6b7280', fontSize:13, margin:0 }}>
+            Un code à 6 chiffres a été envoyé par {methode === 'telephone' ? 'SMS' : 'email'}
+          </p>
+          {/* En développement : afficher le code */}
+          <div style={{ marginTop:10, background:'#fef9c3', borderRadius:8, padding:'8px 14px', fontSize:12, color:'#92400e', border:'1px dashed #fbbf24' }}>
+            🔧 Mode test — Code : <strong>{codeGenere}</strong>
+            <br/><span style={{ fontSize:11, color:'#b45309' }}>(En production, le code sera envoyé par vrai SMS/email)</span>
+          </div>
+        </div>
+        {err && <div style={{ background:'#fef2f2', color:'#dc2626', padding:'10px 14px', borderRadius:9, marginBottom:14, fontSize:13, fontWeight:500, borderLeft:'3px solid #dc2626' }}>⚠️ {err}</div>}
+        <div style={{ marginBottom:20 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:5 }}>Code de vérification (6 chiffres)</label>
+          <input style={{ ...IS, textAlign:'center', fontSize:24, fontWeight:800, letterSpacing:8 }}
+            value={code} onChange={e => { setCode(e.target.value.replace(/[^0-9]/g,'').slice(0,6)); setErr(''); }}
+            onKeyDown={e => e.key === 'Enter' && verifierCode()}
+            placeholder="______" maxLength={6} autoFocus />
+        </div>
+        <button onClick={verifierCode}
+          style={{ width:'100%', padding:'13px', background:'#1a2e4a', color:'#fff', border:'none', borderRadius:9, fontSize:15, fontWeight:700, cursor:'pointer', marginBottom:12 }}>
+          ✅ Vérifier le code →
+        </button>
+        <button onClick={() => { const nc = genererCode(); setCodeGenere(nc); setCode(''); setErr(''); console.log('[ASHOID] Nouveau code:', nc); showToastFn && showToastFn('🔄 Nouveau code envoyé'); }}
+          style={{ width:'100%', padding:'10px', borderRadius:9, border:'none', background:'none', color:'#3b82f6', fontSize:13, fontWeight:600, cursor:'pointer' }}>
+          🔄 Renvoyer le code
+        </button>
+        <button onClick={() => { setEtape(ETAPES.CHOIX); setCode(''); setErr(''); }} style={{ width:'100%', padding:'11px', borderRadius:9, border:'1px solid #e5e7eb', background:'#fff', color:'#6b7280', fontSize:13, fontWeight:600, cursor:'pointer', marginTop:4 }}>← Recommencer</button>
+      </div>
+    </div>
+  );
+
+  // ── Étape NOUVEAU MOT DE PASSE ────────────────────────────────────────────
+  if (etape === ETAPES.NOUVEAU) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f6fa', fontFamily:'inherit' }}>
+      <div style={{ width:'min(420px,92vw)', background:'#fff', borderRadius:18, padding:36, boxShadow:'0 8px 40px rgba(0,0,0,.10)' }}>
+        <div style={{ textAlign:'center', marginBottom:24 }}>
+          <div style={{ width:56, height:56, borderRadius:'50%', background:'#f0fdf4', display:'flex', alignItems:'center', justifyContent:'center', fontSize:24, margin:'0 auto 14px' }}>🔐</div>
+          <h2 style={{ fontSize:20, fontWeight:800, color:'#1a2e4a', margin:'0 0 6px' }}>Nouveau mot de passe</h2>
+          <p style={{ color:'#6b7280', fontSize:13, margin:0 }}>Compte : <strong style={{ color:'#1a2e4a' }}>{userTrouve?.login}</strong></p>
+        </div>
+        {err && <div style={{ background:'#fef2f2', color:'#dc2626', padding:'10px 14px', borderRadius:9, marginBottom:14, fontSize:13, fontWeight:500, borderLeft:'3px solid #dc2626' }}>⚠️ {err}</div>}
+        <div style={{ marginBottom:14 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:5 }}>Nouveau mot de passe</label>
+          <div style={{ position:'relative' }}>
+            <input type={showMdp ? 'text' : 'password'} style={{ ...IS, paddingRight:44 }}
+              value={nouveauMdp} onChange={e => { setNouveauMdp(e.target.value); setErr(''); }}
+              placeholder="Minimum 6 caractères" autoFocus />
+            <button onClick={() => setShowMdp(p => !p)} style={{ position:'absolute', right:12, top:'50%', transform:'translateY(-50%)', background:'none', border:'none', cursor:'pointer', fontSize:16, color:'#9ca3af' }}>
+              {showMdp ? '🙈' : '👁️'}
+            </button>
+          </div>
+          <div style={{ marginTop:6, display:'flex', gap:4 }}>
+            {[1,2,3,4,5].map(n => (
+              <div key={n} style={{ flex:1, height:3, borderRadius:2, background: nouveauMdp.length >= n*2 ? (nouveauMdp.length >= 10 ? '#10b981' : nouveauMdp.length >= 6 ? '#f59e0b' : '#ef4444') : '#e5e7eb' }} />
+            ))}
+          </div>
+          <div style={{ fontSize:11, color:'#9ca3af', marginTop:4 }}>
+            {nouveauMdp.length < 6 ? '❌ Trop court' : nouveauMdp.length < 10 ? '⚠️ Moyen' : '✅ Fort'}
+          </div>
+        </div>
+        <div style={{ marginBottom:20 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:5 }}>Confirmer le mot de passe</label>
+          <input type={showMdp ? 'text' : 'password'} style={{ ...IS, borderColor: nouveauMdp2 && nouveauMdp !== nouveauMdp2 ? '#ef4444' : '#e5e7eb' }}
+            value={nouveauMdp2} onChange={e => { setNouveauMdp2(e.target.value); setErr(''); }}
+            onKeyDown={e => e.key === 'Enter' && changerMotDePasse()}
+            placeholder="Répétez le mot de passe" />
+          {nouveauMdp2 && nouveauMdp !== nouveauMdp2 && <div style={{ fontSize:11, color:'#ef4444', marginTop:4 }}>❌ Les mots de passe ne correspondent pas</div>}
+          {nouveauMdp2 && nouveauMdp === nouveauMdp2 && <div style={{ fontSize:11, color:'#10b981', marginTop:4 }}>✅ Les mots de passe correspondent</div>}
+        </div>
+        <button onClick={changerMotDePasse}
+          style={{ width:'100%', padding:'13px', background:'#10b981', color:'#fff', border:'none', borderRadius:9, fontSize:15, fontWeight:700, cursor:'pointer' }}>
+          ✅ Changer le mot de passe →
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── Étape SUCCÈS ──────────────────────────────────────────────────────────
+  if (etape === ETAPES.SUCCES) return (
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f5f6fa', fontFamily:'inherit' }}>
+      <div style={{ width:'min(420px,92vw)', background:'#fff', borderRadius:18, padding:36, boxShadow:'0 8px 40px rgba(0,0,0,.10)', textAlign:'center' }}>
+        <div style={{ width:80, height:80, borderRadius:'50%', background:'#f0fdf4', display:'flex', alignItems:'center', justifyContent:'center', fontSize:36, margin:'0 auto 20px' }}>🎉</div>
+        <h2 style={{ fontSize:22, fontWeight:800, color:'#1a2e4a', margin:'0 0 10px' }}>Mot de passe modifié !</h2>
+        <p style={{ color:'#6b7280', fontSize:14, lineHeight:1.7, marginBottom:28 }}>
+          Votre mot de passe a été changé avec succès.<br/>
+          Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.
+        </p>
+        <div style={{ background:'#f9fafb', borderRadius:10, padding:'14px 20px', marginBottom:24 }}>
+          <div style={{ fontSize:13, color:'#6b7280' }}>Identifiant</div>
+          <div style={{ fontSize:16, fontWeight:800, color:'#1a2e4a', marginTop:2 }}>{userTrouve?.login}</div>
+        </div>
+        <button onClick={onBack}
+          style={{ width:'100%', padding:'13px', background:'#1a2e4a', color:'#fff', border:'none', borderRadius:9, fontSize:15, fontWeight:700, cursor:'pointer' }}>
+          → Se connecter maintenant
+        </button>
+      </div>
+    </div>
+  );
+
+  return null;
+};
+
+const Login = ({ onLogin, users, onInscription, onMotDePasseOublie }) => {
   const [login, setLogin] = useState("");
   const [pwd, setPwd] = useState("");
   const [err, setErr] = useState("");
@@ -4072,6 +4208,9 @@ const Login = ({ onLogin, users, onInscription }) => {
             <input type="password" value={pwd} onChange={e => { setPwd(e.target.value); setErr(""); }} onKeyDown={e => e.key === "Enter" && go()} placeholder="••••••••" style={{ width: "100%", padding: "11px 14px", borderRadius: 9, border: B2, fontSize: 14, fontFamily: FS.B, outline: "none", boxSizing: "border-box" }} />
           </div>
           <button onClick={go} style={{ width: "100%", padding: "13px", background: T.navy, color: "#fff", border: "none", borderRadius: 9, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: FS.S, marginBottom: 14 }}>Se connecter →</button>
+          <div style={{ textAlign:"center", marginBottom:10 }}>
+            <button onClick={onMotDePasseOublie} style={{ background:"none", border:"none", color:T.muted, fontSize:12, cursor:"pointer", textDecoration:"underline", fontFamily:FS.B }}>🔑 Mot de passe oublié ?</button>
+          </div>
           <div style={{ textAlign:"center", marginBottom:14 }}>
             <span style={{ fontSize:13, color:T.muted }}>Pas encore membre ? </span>
             <button onClick={onInscription} style={{ background:"none", border:"none", color:T.blue, fontWeight:700, fontSize:13, cursor:"pointer", textDecoration:"underline", fontFamily:FS.B }}>S'inscrire →</button>
@@ -4288,10 +4427,19 @@ const DemandesAdmin = ({ data, setData, showToast }) => {
       actif: true, photo: "", cotisation_obligatoire: dem.cotisation_obligatoire||"Oui",
       montant_cotisation_perso: ""
     };
-    // Créer le compte utilisateur
+    // Créer le compte utilisateur (avec toutes les infos pour récupération MDP)
     const nouvUser = {
-      id: Date.now()+1, login: dem.login_souhaite, mot_de_passe: dem.mot_de_passe,
-      role: "Adhérent", nom: `${dem.prenom} ${dem.nom}`, actif: true,
+      id: Date.now()+1,
+      login: dem.login_souhaite,
+      mot_de_passe: dem.mot_de_passe,
+      password: dem.mot_de_passe,
+      role: "Adhérent",
+      nom: `${dem.prenom} ${dem.nom}`,
+      prenom: dem.prenom,
+      email: dem.email || "",
+      telephone: dem.telephone || "",
+      telephone2: dem.telephone2 || "",
+      actif: true,
       id_personne: nouvPers.id
     };
     // Marquer la demande comme validée
@@ -4308,7 +4456,7 @@ const DemandesAdmin = ({ data, setData, showToast }) => {
 
   // ── Refuser une inscription ──
   const refuserInscription = (id) => {
-    if (!window.confirm("Confirmer le refus de cette demande ?")) return;
+    if (window.confirm && !window.confirm("Confirmer le refus de cette demande ?")) return;
     setData(d => ({ ...d, demandes_inscription: d.demandes_inscription.map(x => x.id===id ? {...x, statut:"Refusé"} : x) }));
     showToast("Demande refusée.", "error");
   };
@@ -4329,7 +4477,7 @@ const DemandesAdmin = ({ data, setData, showToast }) => {
   };
 
   const refuserCotisation = (id) => {
-    if (!window.confirm("Refuser cette demande de cotisation ?")) return;
+    if (window.confirm && !window.confirm("Refuser cette demande de cotisation ?")) return;
     setData(d => ({ ...d, demandes_cotisation: (d.demandes_cotisation||[]).map(x => x.id===id ? {...x, statut:"Refusé"} : x) }));
     showToast("Demande de cotisation refusée.", "error");
   };
@@ -4442,6 +4590,96 @@ const DemandesAdmin = ({ data, setData, showToast }) => {
 // ═══════════════════════════════════════════════════════════════════
 // MODULE 19 — ESPACE ADHÉRENT (compte propre)
 // ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// SECTION : CHANGER MOT DE PASSE (dans EspaceAdherent)
+// ═══════════════════════════════════════════════════════════════
+const SectionChangerMdp = ({ user, setData, showToast }) => {
+  const [ouvert, setOuvert] = useState(false);
+  const [ancien, setAncien] = useState('');
+  const [nouveau, setNouveau] = useState('');
+  const [nouveau2, setNouveau2] = useState('');
+  const [err, setErr] = useState('');
+  const [showMdp, setShowMdp] = useState(false);
+  const [succes, setSucces] = useState(false);
+
+  const valider = () => {
+    setErr('');
+    if (!ancien) { setErr('Veuillez saisir votre mot de passe actuel.'); return; }
+    const mdpActuel = user.mot_de_passe || user.password || '';
+    if (ancien !== mdpActuel) { setErr('Mot de passe actuel incorrect.'); return; }
+    if (!nouveau || nouveau.length < 6) { setErr('Nouveau mot de passe : minimum 6 caractères.'); return; }
+    if (nouveau === ancien) { setErr('Le nouveau mot de passe doit être différent de l\'ancien.'); return; }
+    if (nouveau !== nouveau2) { setErr('Les deux mots de passe ne correspondent pas.'); return; }
+    setData(d => ({
+      ...d,
+      utilisateurs: (d.utilisateurs||[]).map(u => u.login===user.login ? {...u, mot_de_passe:nouveau, password:nouveau} : u),
+      personnes:    (d.personnes||[]).map(p => p.login===user.login ? {...p, mot_de_passe:nouveau, password:nouveau} : p)
+    }));
+    showToast('✅ Mot de passe modifié avec succès !');
+    setSucces(true);
+    setTimeout(() => { setOuvert(false); setSucces(false); setAncien(''); setNouveau(''); setNouveau2(''); }, 2200);
+  };
+
+  const force = nouveau.length===0?0:nouveau.length<6?1:nouveau.length<10?2:3;
+  const IS = {width:'100%',padding:'10px 12px',borderRadius:8,border:'1.5px solid #e5e7eb',fontSize:13,outline:'none',boxSizing:'border-box',paddingRight:42};
+
+  return (
+    <div style={{background:'#fff',borderRadius:14,border:'1px solid #e5e7eb',marginTop:20,overflow:'hidden'}}>
+      <button onClick={()=>{setOuvert(o=>!o);setErr('');setSucces(false);}}
+        style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 20px',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <span style={{fontSize:20}}>🔐</span>
+          <div style={{textAlign:'left'}}>
+            <div style={{fontWeight:700,fontSize:14,color:'#1a2e4a'}}>Changer mon mot de passe</div>
+            <div style={{fontSize:12,color:'#9ca3af',marginTop:1}}>Modifier votre mot de passe de connexion</div>
+          </div>
+        </div>
+        <span style={{fontSize:18,color:'#9ca3af',transform:ouvert?'rotate(180deg)':'rotate(0)',transition:'transform .2s'}}>⌄</span>
+      </button>
+      {ouvert && (
+        <div style={{padding:'0 20px 20px',borderTop:'1px solid #f3f4f6'}}>
+          {succes ? (
+            <div style={{textAlign:'center',padding:'24px 0'}}>
+              <div style={{fontSize:40,marginBottom:8}}>🎉</div>
+              <div style={{fontWeight:700,color:'#10b981',fontSize:15}}>Mot de passe modifié !</div>
+            </div>
+          ) : (
+            <>
+              {err && <div style={{background:'#fef2f2',color:'#dc2626',padding:'9px 13px',borderRadius:8,marginBottom:12,fontSize:13,borderLeft:'3px solid #dc2626',marginTop:14}}>⚠️ {err}</div>}
+              <div style={{marginTop:16}}>
+                <label style={{display:'block',fontSize:12,fontWeight:600,color:'#374151',marginBottom:4}}>Mot de passe actuel</label>
+                <div style={{position:'relative'}}>
+                  <input type={showMdp?'text':'password'} style={IS} value={ancien} onChange={e=>{setAncien(e.target.value);setErr('');}} placeholder="Votre mot de passe actuel"/>
+                  <button onClick={()=>setShowMdp(p=>!p)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:14,color:'#9ca3af'}}>{showMdp?'🙈':'👁️'}</button>
+                </div>
+              </div>
+              <div style={{marginTop:12}}>
+                <label style={{display:'block',fontSize:12,fontWeight:600,color:'#374151',marginBottom:4}}>Nouveau mot de passe</label>
+                <div style={{position:'relative'}}>
+                  <input type={showMdp?'text':'password'} style={{...IS,borderColor:nouveau&&force<2?'#ef4444':'#e5e7eb'}} value={nouveau} onChange={e=>{setNouveau(e.target.value);setErr('');}} placeholder="Minimum 6 caractères"/>
+                  <button onClick={()=>setShowMdp(p=>!p)} style={{position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',fontSize:14,color:'#9ca3af'}}>{showMdp?'🙈':'👁️'}</button>
+                </div>
+                {nouveau && (
+                  <div style={{marginTop:5}}>
+                    <div style={{display:'flex',gap:4,marginBottom:2}}>{[1,2,3].map(n=><div key={n} style={{flex:1,height:3,borderRadius:2,background:force>=n?(force===1?'#ef4444':force===2?'#f59e0b':'#10b981'):'#e5e7eb',transition:'background .2s'}}/>)}</div>
+                    <div style={{fontSize:11,color:force===1?'#ef4444':force===2?'#f59e0b':'#10b981'}}>{['','❌ Trop court','⚠️ Moyen','✅ Fort'][force]}</div>
+                  </div>
+                )}
+              </div>
+              <div style={{marginTop:12}}>
+                <label style={{display:'block',fontSize:12,fontWeight:600,color:'#374151',marginBottom:4}}>Confirmer le nouveau mot de passe</label>
+                <input type={showMdp?'text':'password'} style={{...IS,borderColor:nouveau2&&nouveau!==nouveau2?'#ef4444':nouveau2&&nouveau===nouveau2?'#10b981':'#e5e7eb'}} value={nouveau2} onChange={e=>{setNouveau2(e.target.value);setErr('');}} onKeyDown={e=>e.key==='Enter'&&valider()} placeholder="Répétez le nouveau mot de passe"/>
+                {nouveau2 && <div style={{fontSize:11,marginTop:2,color:nouveau===nouveau2?'#10b981':'#ef4444'}}>{nouveau===nouveau2?'✅ Correspond':'❌ Ne correspond pas'}</div>}
+              </div>
+              <button onClick={valider} style={{marginTop:16,width:'100%',padding:'11px',background:'#1a2e4a',color:'#fff',border:'none',borderRadius:9,fontSize:14,fontWeight:700,cursor:'pointer'}}>🔐 Changer le mot de passe</button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const EspaceAdherent = ({ data, setData, showToast, user, setPage }) => {
   const annee = new Date().getFullYear();
   const moisCour = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"][new Date().getMonth()];
@@ -4636,6 +4874,10 @@ const EspaceAdherent = ({ data, setData, showToast, user, setPage }) => {
           <ModalFooter onCancel={()=>setModalCot(false)} onSave={soumettreDemandesCot} saveLabel="📤 Envoyer la demande"/>
         </Modal>
       )}
+
+      {/* Changer le mot de passe */}
+      <SectionChangerMdp user={user} setData={setData} showToast={showToast} />
+
     </div>
   );
 };
@@ -4688,6 +4930,7 @@ export default function App() {
   const [showInscription, setShowInscription] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [showRecuperation, setShowRecuperation] = useState(false);
+  const [showMdpOublie, setShowMdpOublie] = useState(false);
   const [backupsList, setBackupsList] = useState([]);
 
   // ── États de synchronisation ─────────────────────────────────────────────
@@ -4712,14 +4955,26 @@ export default function App() {
           console.log(`[ASHOID] 🔄 .exe sync depuis ${source}`);
         }
 
-      // ── Mode navigateur → Render uniquement ──────────────────────────────
+      // ── Mode navigateur : charger Railway + Render et comparer ────────────
       } else {
-        const isOnRender = window.location.hostname.includes("onrender.com");
-        const url = isOnRender ? "/api/data" : `${SERVER_RENDER}/api/data`;
-        const dataRender = await chargerDepuis(url, 12000);
-        if (dataRender) {
-          meilleurData = mergeWithDefault(dataRender);
-          source = "Render";
+        const isLocal = window.location.hostname === "localhost" || window.location.protocol === "file:";
+        const isRailway = window.location.hostname.includes("railway.app");
+        const isRender  = window.location.hostname.includes("onrender.com");
+
+        // Charger les deux en parallèle
+        const [dRailway, dRender] = await Promise.allSettled([
+          chargerDepuis(isRailway ? "/api/data" : `${SERVER_RAILWAY}/api/data`, 7000),
+          chargerDepuis(isRender  ? "/api/data" : `${SERVER_RENDER}/api/data`,  9000),
+        ]);
+
+        const dataRailway = dRailway.status === "fulfilled" ? dRailway.value : null;
+        const dataRender  = dRender.status  === "fulfilled" ? dRender.value  : null;
+
+        if (dataRailway || dataRender) {
+          // Sync croisée : le plus riche gagne + harmonisation automatique
+          const meilleur = await syncCroisee(dataRailway, dataRender);
+          meilleurData = mergeWithDefault(meilleur);
+          source = dataRailway && scoreData(dataRailway) >= scoreData(dataRender) ? "Railway" : "Render";
         }
       }
 
@@ -4771,12 +5026,20 @@ export default function App() {
 
   // ── Chargement initial ────────────────────────────────────────────────────
   useEffect(() => {
-    loadDataAsync().then(loaded => {
-      setDataRaw(loaded);
-      setDataLoaded(true);
-    });
+    // Chargement immédiat (localStorage ou DEFAULT) pour affichage rapide
+    const quickLoad = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return mergeWithDefault(JSON.parse(raw));
+      } catch {}
+      return DEFAULT;
+    };
+    setDataRaw(quickLoad());
+    setDataLoaded(true);
+    // Sync serveur en arrière-plan
+    loadDataAsync().then(loaded => setDataRaw(loaded)).catch(() => {});
     // Vérifier la connexion
-    fetch(`${SERVER_URL}/api/health`, { signal: AbortSignal.timeout(4000) })
+    fetch(`${SERVER_URL}/api/health`)
       .then(r => { if (r.ok) setOnline(true); })
       .catch(() => {});
   }, []);
@@ -4878,12 +5141,23 @@ export default function App() {
   );
 
   if (!user) {
+    // Page inscription
     if (showInscription) return (
       <FormulaireInscription
         data={data} setData={setData}
         onBack={() => setShowInscription(false)}
       />
     );
+    // Page mot de passe oublié
+    if (showMdpOublie) return (
+      <MotDePasseOublie
+        users={data.utilisateurs || []}
+        setData={setData}
+        showToastFn={showToast}
+        onBack={() => setShowMdpOublie(false)}
+      />
+    );
+    // Page connexion
     return (
       <>
         <style>{FONT}</style>
@@ -4894,6 +5168,7 @@ export default function App() {
             setPage("dashboard");
           }}
           onInscription={() => setShowInscription(true)}
+          onMotDePasseOublie={() => setShowMdpOublie(true)}
         />
       </>
     );
@@ -4996,17 +5271,17 @@ export default function App() {
             <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{data.config?.nom_association || "ASHOID"} · {user.role} · {new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
           </div>
           <div style={{ display: "flex", gap: 7, alignItems: "center", flexShrink: 0 }}>
-            {/* Indicateur connexion Render (serveur unique) */}
+            {/* Indicateur de connexion + bouton sync */}
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <div title="https://ashoid.onrender.com" style={{ fontSize: 10, background: online ? T.mint : T.rose, color: online ? T.emerald : T.red, padding: "4px 9px", borderRadius: 6, fontWeight: 600, border: `1px solid ${online ? T.emerald : T.red}`, display: "flex", alignItems: "center", gap: 4, cursor: "default" }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: online ? T.emerald : T.red, display: "inline-block" }} />
-                {online ? "☁️ Render ✅" : "☁️ Render ❌"}
+              <div style={{ fontSize: 11, background: online ? T.mint : "#FEF3C7", color: online ? T.emerald : T.amber, padding: "4px 10px", borderRadius: 6, fontWeight: 600, border: `1px solid ${online ? T.emerald : "#FCD34D"}`, display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: online ? T.emerald : T.amber, display: "inline-block" }} />
+                {online ? "En ligne" : "Hors ligne"}
+                {lastSync && online && <span style={{ opacity: .7, fontWeight: 400 }}>· {lastSync.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>}
               </div>
-              {lastSync && <span style={{ fontSize: 10, color: T.muted }}>· {lastSync.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>}
               <button
                 onClick={syncManuel}
                 disabled={syncEn}
-                title="Synchroniser Railway + Render"
+                title="Synchroniser avec le serveur"
                 style={{ fontSize: 11, background: syncEn ? T.sky : T.white, color: T.blue, padding: "4px 10px", borderRadius: 6, fontWeight: 600, border: `1px solid ${T.blue}`, cursor: syncEn ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ display: "inline-block", animation: syncEn ? "spin 1s linear infinite" : "none" }}>🔄</span>
                 {syncEn ? "Sync…" : "Sync"}
@@ -5023,7 +5298,15 @@ export default function App() {
       </div>
 
       {/* Toast */}
-      {showRecuperation && IS_ELECTRON && <PanneauRecuperation />}
+      {showRecuperation && IS_ELECTRON && <PanneauRecuperation
+        onClose={() => setShowRecuperation(false)}
+        onRestore={(raw) => {
+          const restored = mergeWithDefault(JSON.parse(raw));
+          setDataRaw(restored);
+          saveData(restored);
+        }}
+        showToastFn={showToast}
+      />}
       {toast && <Toast msg={toast.msg} type={toast.type} />}
     </div>
   );
