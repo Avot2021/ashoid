@@ -871,7 +871,7 @@ return (
 // ═══════════════════════════════════════════════════════════════════
 // MODULE 1 — DASHBOARD
 // ═══════════════════════════════════════════════════════════════════
-const Dashboard = ({ data, setPage }) => {
+const Dashboard = ({ data, setPage, user: user_ }) => {
   const annee = new Date().getFullYear();
   const moisCour = MOIS[new Date().getMonth()];
   const majeurs = data.personnes.filter(p => p.cotisation_obligatoire === "Oui");
@@ -893,7 +893,7 @@ const Dashboard = ({ data, setPage }) => {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }} className="kpi-grid">
         <KPI label="Taux cotisation" value={`${taux}%`} icon="📊" color={taux >= 70 ? T.emerald : T.amber} />
         <KPI label="Solde trésorerie" value={`${solde} €`} icon="🏦" color={solde >= 0 ? T.emerald : T.red} />
-        <KPI label="Alertes actives" value={alertesNL} icon="🔔" color={alertesNL > 0 ? T.red : T.emerald} onClick={() => setPage("alertes")} />
+        {user_?.role !== "Adhérent" && <KPI label="Alertes actives" value={alertesNL} icon="🔔" color={alertesNL > 0 ? T.red : T.emerald} onClick={() => setPage("alertes")} />}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 20 }}>
@@ -928,7 +928,7 @@ const Dashboard = ({ data, setPage }) => {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 16 }}>
-        <Card>
+        {user_?.role !== "Adhérent" && <Card>
           <h4 style={{ fontFamily: FS.S, fontSize: 13, fontWeight: 700, color: T.navy, marginBottom: 12 }}>Dernières alertes</h4>
           {data.alertes.filter(a => a.statut === "Non traité").slice(0, 3).map(a => (
             <div key={a.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "6px 0", borderBottom: B1 }}>
@@ -940,7 +940,7 @@ const Dashboard = ({ data, setPage }) => {
             </div>
           ))}
           {data.alertes.filter(a => a.statut === "Non traité").length === 0 && <p style={{ fontSize: 13, color: T.muted }}>✅ Aucune alerte</p>}
-        </Card>
+        </Card>}
         <Card>
           <h4 style={{ fontFamily: FS.S, fontSize: 13, fontWeight: 700, color: T.navy, marginBottom: 12 }}>Prochains événements</h4>
           {data.evenements.filter(e => e.statut === "Planifié").slice(0, 3).map(e => (
@@ -5489,7 +5489,7 @@ export default function App() {
                 {syncEn ? "Sync…" : "Sync"}
               </button>
             </div>
-            {nbAlertes > 0 && <div style={{ background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 7, padding: "5px 11px", fontSize: 12, fontWeight: 600, color: T.amber, cursor: "pointer" }} onClick={() => setPage("alertes")}>🔔 {nbAlertes}</div>}
+            {nbAlertes > 0 && user?.role !== "Adhérent" && <div style={{ background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 7, padding: "5px 11px", fontSize: 12, fontWeight: 600, color: T.amber, cursor: "pointer" }} onClick={() => setPage("alertes")}>🔔 {nbAlertes}</div>}
             {IS_ELECTRON && <button onClick={() => { setShowRecuperation(true); }} title="Récupérer des données perdues" style={{ background: T.rose, border: `1px solid ${T.red}`, borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 600, color: T.red, cursor: "pointer", fontFamily: FS.B, marginRight: 4 }}>🔄 Récupérer données</button>}
             <button onClick={() => { setUser(null); setPage("dashboard"); }} style={{ background: T.light, border: B1, borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 600, color: T.muted, cursor: "pointer", fontFamily: FS.B }}>⏏️ Déconnexion</button>
           </div>
