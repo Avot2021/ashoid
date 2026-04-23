@@ -1459,10 +1459,42 @@ const Cotisations = ({ data, setData, showToast }) => {
     const personne = data.personnes.find(p => p.id === Number(form.id_personne));
     const obj = { ...form, id_personne: Number(form.id_personne), annee: Number(form.annee), montant: Number(form.montant), reference: ref };
     if (editId) {
-      setData(d => ({ ...d, cotisations: d.cotisations.map(c => c.id === editId ? { ...c, ...obj } : c) }));
+      // Met à jour la cotisation ET l'entrée finance liée (auto_generated)
+      const descNew = `Cotisation ${form.mois} ${form.annee} — ${personne ? personne.prenom + " " + personne.nom : ""}`;
+      setData(d => {
+        // Trouver la finance auto-générée correspondante
+        // Chercher par référence d'abord, sinon par cotisation_id, sinon par description similaire
+        const cotisationOld = d.cotisations.find(c => c.id === editId);
+        const finIdx = d.finances.findIndex(f =>
+          f.auto_generated &&
+          f.categorie === "Cotisation" && (
+            (cotisationOld && f.cotisation_id === editId) ||
+            (cotisationOld && f.reference === cotisationOld.reference) ||
+            (cotisationOld && f.description && f.description.includes(
+              (d.personnes.find(p => p.id === Number(form.id_personne))?.nom || "")))
+          )
+        );
+        const newFinances = [...d.finances];
+        if (finIdx >= 0) {
+          newFinances[finIdx] = {
+            ...newFinances[finIdx],
+            montant: Number(form.montant),
+            date_operation: form.date_paiement || today(),
+            description: descNew,
+            mode_paiement: form.mode_paiement,
+            annee: Number(form.annee),
+          };
+        }
+        return {
+          ...d,
+          cotisations: d.cotisations.map(c => c.id === editId ? { ...c, ...obj } : c),
+          finances: newFinances,
+        };
+      });
     } else {
       const nc = { id: genId(), ...obj };
-      const finEntry = { id: genId(), type_operation: "Recette", categorie: "Cotisation", montant: Number(form.montant), date_operation: form.date_paiement || today(), description: `Cotisation ${form.mois} ${form.annee} — ${personne ? personne.prenom + " " + personne.nom : ""}`, mode_paiement: form.mode_paiement, annee: Number(form.annee), auto_generated: true };
+      const finId = genId();
+      const finEntry = { id: finId, cotisation_id: nc.id, type_operation: "Recette", categorie: "Cotisation", montant: Number(form.montant), date_operation: form.date_paiement || today(), description: `Cotisation ${form.mois} ${form.annee} — ${personne ? personne.prenom + " " + personne.nom : ""}`, mode_paiement: form.mode_paiement, annee: Number(form.annee), auto_generated: true, reference: ref };
       setData(d => ({ ...d, cotisations: [...d.cotisations, nc], finances: [...d.finances, finEntry] }));
     }
     showToast(editId ? "Cotisation modifiée !" : "Cotisation enregistrée et ajoutée aux finances !");
@@ -2014,16 +2046,24 @@ const Finances = ({ data, setData, showToast }) => {
   // Solde final cumulé = somme de toutes les années jusqu'à annee courant
   const soldeFinalCumule = tableauSoldes.length > 0 ? tableauSoldes[tableauSoldes.length - 1].cumul_total : 0;
 
-  const save = () => {
-    if (!form.type_operation || !form.categorie) { alert("Type et catégorie obligatoires."); return; }
-    if (!form.montant || Number(form.montant) <= 0) { alert("Montant invalide."); return; }
-    if (!form.date_operation) { alert("Date obligatoire."); return; }
-    if (editId) {
-      setData(d => ({ ...d, finances: d.finances.map(x => x.id === editId ? { ...x, ...form, montant: Number(form.montant), annee: Number(form.annee || annee) } : x) }));
+  const saveFinance = (currentEditId, currentForm) => {
+    if (!currentForm.type_operation || !currentForm.categorie) { showToast("Type et catégorie obligatoires.", "error"); return; }
+    if (!currentForm.montant || Number(currentForm.montant) <= 0) { showToast("Montant invalide.", "error"); return; }
+    if (!currentForm.date_operation) { showToast("Date obligatoire.", "error"); return; }
+    if (currentEditId) {
+      setData(d => ({
+        ...d,
+        finances: d.finances.map(x =>
+          x.id === currentEditId
+            ? { ...x, ...currentForm, montant: Number(currentForm.montant), annee: Number(currentForm.annee || annee) }
+            : x
+        )
+      }));
+      showToast("Opération modifiée !");
     } else {
-      setData(d => ({ ...d, finances: [...d.finances, { id: genId(), ...form, montant: Number(form.montant), annee: Number(form.annee || annee) }] }));
+      setData(d => ({ ...d, finances: [...d.finances, { id: genId(), ...currentForm, montant: Number(currentForm.montant), annee: Number(currentForm.annee || annee) }] }));
+      showToast("Opération enregistrée !");
     }
-    showToast(editId ? "Opération modifiée !" : "Opération enregistrée !");
     setModal(false); setForm(ef); setEditId(null);
   };
 
@@ -2184,7 +2224,7 @@ const Finances = ({ data, setData, showToast }) => {
             <Field label="Année comptable" value={form.annee} onChange={v => f("annee", v)} options={["2019","2020","2021","2022","2023","2024","2025","2026"]} />
           </div>
           <Field label="Description" value={form.description} onChange={v => f("description", v)} type="textarea" />
-          <ModalFooter onCancel={() => { setModal(false); setEditId(null); }} onSave={save} />
+          <ModalFooter onCancel={() => { setModal(false); setEditId(null); }} onSave={() => saveFinance(editId, form)} />
         </Modal>
       )}
     </div>
@@ -3122,45 +3162,162 @@ const CommunicationAnnuaire = ({ data, setData, showToast, user }) => {
 // MODULE 14 — ALERTES
 // ═══════════════════════════════════════════════════════════════════
 const Alertes = ({ data, setData, showToast }) => {
+  const [waModal, setWaModal] = useState(false);
+  const [waListe, setWaListe] = useState([]);
+  const today_ = new Date();
+  const jourAuj = today_.getDate();
+  const estJourRappel = jourAuj === 2 || jourAuj === 27;
+  const moisActuel = MOIS[today_.getMonth()];
+  const anneeActuelle = today_.getFullYear();
+
+  // Normaliser numéro WhatsApp : 06... → 336...
+  const normalizeWA = (tel) => {
+    if (!tel) return null;
+    let n = tel.replace(/[\s\-\.\(\)]/g, '');
+    if (n.startsWith('+')) n = n.slice(1);
+    if (n.startsWith('00')) n = n.slice(2);
+    if (n.startsWith('0') && n.length === 10) n = '33' + n.slice(1);
+    return n.length >= 10 ? n : null;
+  };
+
   const generer = () => {
-    const m = MOIS[new Date().getMonth()]; const annee = new Date().getFullYear();
     const nouvelles = [];
     data.personnes.filter(p => p.cotisation_obligatoire === "Oui").forEach(p => {
-      const paye = data.cotisations.some(c => c.id_personne === p.id && c.mois === m && c.annee === annee);
+      const paye = data.cotisations.some(c => c.id_personne === p.id && c.mois === moisActuel && c.annee === anneeActuelle);
       if (!paye) {
-        const deja = data.alertes.some(a => a.id_personne === p.id && (a.message || "").includes(m));
-        if (!deja) nouvelles.push({ id: genId(), type: "Cotisation manquante", message: `${p.prenom} ${p.nom} — cotisation ${m} ${annee} non réglée`, statut: "Non traité", date: today(), id_personne: p.id });
+        const deja = data.alertes.some(a => a.id_personne === p.id && (a.message || "").includes(moisActuel));
+        if (!deja) nouvelles.push({ id: genId(), type: "Cotisation manquante", message: `${p.prenom} ${p.nom} — cotisation ${moisActuel} ${anneeActuelle} non réglée`, statut: "Non traité", date: today(), id_personne: p.id });
       }
     });
-    if (nouvelles.length === 0) { alert("Aucune nouvelle alerte."); return; }
+    if (nouvelles.length === 0) { showToast("Aucune nouvelle alerte à générer.", "error"); return; }
     setData(d => ({ ...d, alertes: [...d.alertes, ...nouvelles] }));
     showToast(`${nouvelles.length} alerte(s) générée(s) !`);
   };
+
+  const ouvrirWhatsApp = () => {
+    const nonPayes = data.personnes.filter(p => {
+      if (p.cotisation_obligatoire !== "Oui") return false;
+      return !data.cotisations.some(c => c.id_personne === p.id && c.mois === moisActuel && c.annee === anneeActuelle);
+    }).map(p => ({
+      ...p,
+      waNum: normalizeWA(p.telephone) || normalizeWA(p.telephone2),
+    }));
+    if (nonPayes.length === 0) { showToast("🎉 Tous les adhérents sont à jour !"); return; }
+    setWaListe(nonPayes);
+    setWaModal(true);
+  };
+
+  const msgWA = (prenom, nom, montant) => {
+    const assoc = data.config?.nom_association || "ASHOID";
+    const m = encodeURIComponent(
+      `Bonjour ${prenom} ${nom},\n\nNous vous rappelons que votre cotisation de ${montant || data.config?.montant_cotisation || 10} € pour le mois de ${moisActuel} ${anneeActuelle} n'a pas encore été réglée.\n\nMerci de procéder au paiement dans les meilleurs délais.\n\nCordialement,\n${assoc}`
+    );
+    return m;
+  };
+
   return (
     <div className="fade-up">
+      {/* Bannière rappel WhatsApp le 2 et 27 */}
+      {estJourRappel && (
+        <div style={{ background: "linear-gradient(135deg, #25D366 0%, #128C7E 100%)", borderRadius: 12, padding: "14px 20px", marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 4px 16px rgba(37,211,102,.3)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 28 }}>📲</span>
+            <div>
+              <div style={{ color: "#fff", fontWeight: 800, fontSize: 14, fontFamily: FS.S }}>Jour de rappel WhatsApp — {jourAuj === 2 ? "2" : "27"} du mois</div>
+              <div style={{ color: "rgba(255,255,255,.8)", fontSize: 12, marginTop: 2 }}>Envoyez les rappels de cotisation aux adhérents non à jour pour {moisActuel} {anneeActuelle}</div>
+            </div>
+          </div>
+          <button onClick={ouvrirWhatsApp} style={{ background: "#fff", color: "#128C7E", border: "none", borderRadius: 9, padding: "10px 18px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: FS.S, display: "flex", alignItems: "center", gap: 6 }}>
+            <span>💬</span> Envoyer les rappels
+          </button>
+        </div>
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
-        <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>🔔 Alertes</h2><p style={{ color: T.muted, fontSize: 13 }}>{data.alertes.filter(a => a.statut === "Non traité").length} alerte(s) active(s)</p></div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div>
+          <h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>🔔 Alertes</h2>
+          <p style={{ color: T.muted, fontSize: 13 }}>{data.alertes.filter(a => a.statut === "Non traité").length} alerte(s) active(s)</p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn label="💬 Rappels WhatsApp" variant="success"
+            icon="📲"
+            onClick={ouvrirWhatsApp}
+          />
           <Btn label="⚡ Générer alertes" variant="amber" onClick={generer} />
           <Btn label="✓ Tout traiter" variant="ghost" onClick={() => { setData(d => ({ ...d, alertes: d.alertes.map(a => ({ ...a, statut: "Traité" })) })); showToast("Toutes les alertes traitées !"); }} />
         </div>
       </div>
+
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {data.alertes.length === 0 && <Card><p style={{ textAlign: "center", color: T.muted, padding: 24 }}>✅ Aucune alerte</p></Card>}
-        {[...data.alertes].reverse().map(a => (
-          <div key={a.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "13px 16px", background: T.white, borderRadius: 10, border: `1.5px solid ${a.statut === "Traité" ? T.border : T.amber}`, boxShadow: a.statut === "Non traité" ? "0 2px 8px rgba(251,191,36,.12)" : "none" }}>
-            <span style={{ fontSize: 20 }}>{a.statut === "Traité" ? "✅" : "⚠️"}</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, color: T.dark, fontSize: 13, marginBottom: 2 }}>{a.message}</div>
-              <div style={{ fontSize: 11, color: T.muted }}>{a.type} · {a.date}</div>
+        {[...data.alertes].reverse().map(a => {
+          const personne = data.personnes.find(p => p.id === a.id_personne);
+          const waNum = personne && (normalizeWA(personne.telephone) || normalizeWA(personne.telephone2));
+          return (
+            <div key={a.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "13px 16px", background: T.white, borderRadius: 10, border: `1.5px solid ${a.statut === "Traité" ? T.border : T.amber}`, boxShadow: a.statut === "Non traité" ? "0 2px 8px rgba(251,191,36,.12)" : "none" }}>
+              <span style={{ fontSize: 20 }}>{a.statut === "Traité" ? "✅" : "⚠️"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, color: T.dark, fontSize: 13, marginBottom: 2 }}>{a.message}</div>
+                <div style={{ fontSize: 11, color: T.muted }}>{a.type} · {a.date}</div>
+              </div>
+              <div style={{ display: "flex", gap: 5 }}>
+                {a.statut === "Non traité" && waNum && (
+                  <a
+                    href={`https://wa.me/${waNum}?text=${personne ? msgWA(personne.prenom, personne.nom, personne.montant_cotisation_perso) : ""}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#25D366", color: "#fff", borderRadius: 7, fontSize: 11, fontWeight: 700, textDecoration: "none" }}
+                  >💬 WA</a>
+                )}
+                {a.statut === "Non traité" && <Btn label="✓ Traiter" variant="success" sm onClick={() => { setData(d => ({ ...d, alertes: d.alertes.map(x => x.id === a.id ? { ...x, statut: "Traité" } : x) })); showToast("Alerte traitée !"); }} />}
+                <Btn label="🗑️" variant="danger" sm onClick={() => { setData(d => ({ ...d, alertes: d.alertes.filter(x => x.id !== a.id) })); showToast("Alerte supprimée.", "error"); }} />
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 5 }}>
-              {a.statut === "Non traité" && <Btn label="✓ Traiter" variant="success" sm onClick={() => { setData(d => ({ ...d, alertes: d.alertes.map(x => x.id === a.id ? { ...x, statut: "Traité" } : x) })); showToast("Alerte traitée !"); }} />}
-              <Btn label="🗑️" variant="danger" sm onClick={() => { setData(d => ({ ...d, alertes: d.alertes.filter(x => x.id !== a.id) })); showToast("Alerte supprimée.", "error"); }} />
+          );
+        })}
+      </div>
+
+      {/* Modal WhatsApp rappels groupés */}
+      {waModal && (
+        <Modal title={`💬 Rappels WhatsApp — ${moisActuel} ${anneeActuelle}`} onClose={() => setWaModal(false)} wide>
+          <div style={{ background: "#E7F9EE", border: "1.5px solid #25D366", borderRadius: 9, padding: "10px 14px", marginBottom: 16, fontSize: 13, color: "#128C7E", fontWeight: 500 }}>
+            📲 <strong>{waListe.length}</strong> adhérent(s) non à jour pour {moisActuel} {anneeActuelle}. Cliquez sur le bouton vert pour ouvrir WhatsApp avec le message pré-rempli.
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8 }}>APERÇU DU MESSAGE</div>
+            <div style={{ background: "#ECF8F1", borderRadius: 9, padding: "10px 14px", fontSize: 12, color: T.dark, lineHeight: 1.7, fontStyle: "italic", whiteSpace: "pre-line", border: "1px solid #25D36640" }}>
+              {`Bonjour [Prénom Nom],\n\nNous vous rappelons que votre cotisation de ${data.config?.montant_cotisation || 10} € pour le mois de ${moisActuel} ${anneeActuelle} n'a pas encore été réglée.\n\nMerci de procéder au paiement dans les meilleurs délais.\n\nCordialement,\n${data.config?.nom_association || "ASHOID"}`}
             </div>
           </div>
-        ))}
-      </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
+            {waListe.map((p, i) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: i % 2 === 0 ? T.white : T.light, borderRadius: 8, border: B1 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 9, background: T.sky, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>
+                  {p.photo ? <img src={p.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 9 }} /> : (p.genre === "Homme" ? "👨" : "👩")}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, color: T.dark, fontSize: 13 }}>{p.prenom} {p.nom}</div>
+                  <div style={{ fontSize: 11, color: T.muted }}>{p.telephone || "Pas de tél."} · {p.region || "—"}</div>
+                </div>
+                {p.waNum ? (
+                  <a
+                    href={`https://wa.me/${p.waNum}?text=${msgWA(p.prenom, p.nom, p.montant_cotisation_perso)}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px", background: "#25D366", color: "#fff", borderRadius: 8, fontSize: 12, fontWeight: 800, textDecoration: "none", flexShrink: 0 }}
+                  >
+                    💬 Envoyer WA
+                  </a>
+                ) : (
+                  <span style={{ fontSize: 11, color: T.red, fontWeight: 600, padding: "6px 10px", background: T.rose, borderRadius: 7 }}>❌ Pas de numéro</span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 14, borderTop: B1 }}>
+            <div style={{ fontSize: 12, color: T.muted }}>Les rappels sont envoyés le <strong>2</strong> et le <strong>27</strong> de chaque mois</div>
+            <Btn label="Fermer" variant="ghost" onClick={() => setWaModal(false)} />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };
