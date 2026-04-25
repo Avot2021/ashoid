@@ -3841,11 +3841,58 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
     }
   };
 
+  // ── Génération comptes pour adhérents existants sans compte ──────────────
+  const [rapportModal, setRapportModal] = useState(false);
+  const [rapportComptes, setRapportComptes] = useState([]);
+
+  const genererComptesAdherents = () => {
+    const existingLogins = new Set((data.utilisateurs || []).map(u => u.login));
+    const adherentsAvecCompte = new Set(
+      (data.utilisateurs || []).filter(u => u.role === "Adhérent").map(u => u.id_personne)
+    );
+    const nouveaux = [];
+    (data.personnes || []).forEach(p => {
+      if (adherentsAvecCompte.has(p.id)) return; // déjà un compte
+      const prenomBase = (p.prenom || "").toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      const numAdhesion = p.id_personne || p.id;
+      const login = `${prenomBase}.${numAdhesion}`;
+      if (existingLogins.has(login)) return; // login déjà pris
+      const newUser = {
+        id: genId(),
+        login,
+        mot_de_passe: prenomBase + "123",
+        role: "Adhérent",
+        nom: p.nom,
+        prenom: p.prenom,
+        email: p.email || "",
+        telephone: p.telephone || "",
+        actif: true,
+        id_personne: p.id,
+      };
+      nouveaux.push(newUser);
+      existingLogins.add(login);
+    });
+    if (nouveaux.length === 0) {
+      showToast("✅ Tous les adhérents ont déjà un compte !", "success");
+      return;
+    }
+    setData(d => ({ ...d, utilisateurs: [...(d.utilisateurs || []), ...nouveaux] }));
+    setRapportComptes(nouveaux);
+    setRapportModal(true);
+    showToast(`✅ ${nouveaux.length} compte(s) créé(s) !`);
+  };
+
   return (
     <div className="fade-up">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
         <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>⚙️ Sécurité & Paramètres</h2><p style={{ color: T.muted, fontSize: 13 }}>Accès et configuration</p></div>
-        {tab === "securite" && <Btn label="➕ Ajouter utilisateur" variant="success" onClick={() => { setEditU(null); setFormU(eu); setModalU(true); }} />}
+        {tab === "securite" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn label="🔑 Générer comptes adhérents" variant="amber" onClick={genererComptesAdherents} />
+            <Btn label="➕ Ajouter utilisateur" variant="success" onClick={() => { setEditU(null); setFormU(eu); setModalU(true); }} />
+          </div>
+        )}
         {tab === "parametres" && <Btn label="💾 Sauvegarder" variant="success" onClick={saveP} />}
       </div>
       <div style={{ display: "flex", gap: 2, marginBottom: 16, background: T.light, borderRadius: 9, padding: 3, width: "fit-content", border: B1 }}>
@@ -3946,11 +3993,44 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
           <ModalFooter onCancel={() => { setModalU(false); setEditU(null); }} onSave={saveU} />
         </Modal>
       )}
+
+      {/* ── MODAL RAPPORT COMPTES GÉNÉRÉS ── */}
+      {rapportModal && (
+        <Modal title="🔑 Comptes adhérents générés" onClose={() => setRapportModal(false)} wide>
+          <div style={{ background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 9, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#166534", fontWeight: 600 }}>
+            ✅ {rapportComptes.length} compte(s) créé(s) avec succès. Transmettez ces identifiants aux adhérents.
+          </div>
+          <div style={{ overflowX: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: T.navy }}>
+                  <th style={{ padding: "8px 12px", color: "#fff", textAlign: "left", fontWeight: 700, fontFamily: FS.S }}>Adhérent</th>
+                  <th style={{ padding: "8px 12px", color: "#fff", textAlign: "left", fontWeight: 700, fontFamily: FS.S }}>Login</th>
+                  <th style={{ padding: "8px 12px", color: "#fff", textAlign: "left", fontWeight: 700, fontFamily: FS.S }}>Mot de passe</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rapportComptes.map((u, i) => (
+                  <tr key={u.id} style={{ background: i % 2 === 0 ? "#fff" : "#F8FAFC" }}>
+                    <td style={{ padding: "7px 12px", borderBottom: B1 }}>{u.prenom} {u.nom}</td>
+                    <td style={{ padding: "7px 12px", borderBottom: B1, fontFamily: "monospace", fontWeight: 700, color: T.navy }}>{u.login}</td>
+                    <td style={{ padding: "7px 12px", borderBottom: B1, fontFamily: "monospace", color: T.emerald, fontWeight: 700 }}>{u.mot_de_passe}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ background: "#FEF9C3", border: "1px solid #FDE68A", borderRadius: 8, padding: "9px 13px", fontSize: 12, color: "#92400E" }}>
+            💡 Conseil : faites une capture d'écran ou imprimez cette liste avant de la fermer.
+          </div>
+          <ModalFooter onCancel={() => setRapportModal(false)} saveLabel="✓ Fermer" onSave={() => setRapportModal(false)} />
+        </Modal>
+      )}
+
     </div>
   );
 };
 
-// ═══════════════════════════════════════════════════════════════════
 // MODULE 16 — STATISTIQUES
 // ═══════════════════════════════════════════════════════════════════
 const Statistiques = ({ data, setPage }) => {
