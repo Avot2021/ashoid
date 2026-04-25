@@ -106,6 +106,7 @@ const DEFAULT = {
   medias: [],
   medias_galerie: [],
   messages: [],
+  sortissants: [],
   config: {
     nom_association: "ASHOID", montant_cotisation: 10, siege: "Marseille", siret: "", email_contact: "contact@ashoid.fr",
     telephone_contact: "", site_web: "", couleur_carte: "#0F2D5C", logo: "",
@@ -271,6 +272,7 @@ const mergeWithDefault = (saved) => ({
   demandes_inscription: saved.demandes_inscription || [],
   demandes_cotisation:  saved.demandes_cotisation  || [],
   medias_galerie:       saved.medias_galerie        || [],
+  sortissants:          saved.sortissants           || [],
 });
 
 // ── Chargement initial (synchrone pour localStorage/Electron, async pour serveur)
@@ -1132,8 +1134,24 @@ const Recensement = ({ data, setData, showToast }) => {
       showToast("Adhérent modifié !");
     } else {
       const newP = { id: genId(), ...form, id_personne: form.id_personne || genPersId(), numero_carte: form.numero_carte || genCarte() };
-      setData(d => ({ ...d, personnes: [...d.personnes, newP] }));
-      showToast("Adhérent ajouté !");
+      // ── Créer automatiquement un compte utilisateur Adhérent ──────────────
+      const prenomBase = (form.prenom || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      const numAdhesion = newP.id_personne || newP.id;
+      const login = `${prenomBase}.${numAdhesion}`;
+      const newUser = {
+        id: genId(),
+        login,
+        mot_de_passe: prenomBase + "123",
+        role: "Adhérent",
+        nom: form.nom,
+        prenom: form.prenom,
+        email: form.email || "",
+        telephone: form.telephone || "",
+        actif: true,
+        id_personne: newP.id,
+      };
+      setData(d => ({ ...d, personnes: [...d.personnes, newP], utilisateurs: [...(d.utilisateurs || []), newUser] }));
+      showToast(`✅ Adhérent ajouté ! Compte créé — Login : ${login} / MDP : ${prenomBase}123`);
     }
     setModal(false); setEditing(null); setForm(ef);
   };
@@ -1408,6 +1426,387 @@ const Recensement = ({ data, setData, showToast }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════
+// MODULE SORTISSANTS — SORTISSANTS DE HAMBOU
+// ═══════════════════════════════════════════════════════════════════
+// Champs complets de la fiche sortissant
+const SORTISSANT_EMPTY = {
+  prenom:"",nom:"",surnom:"",id_personne:"",genre:"",region:"",statut:"Majeur",
+  cotisation_obligatoire:"Oui",montant_cotisation_perso:"",
+  date_naissance:"",lieu_naissance:"",nationalite:"Française",tranche_age:"",
+  situation_matrimoniale:"Célibataire",origine_conjoint:"",nom_conjoint:"",nb_enfants:"0",
+  telephone:"",telephone2:"",email:"",
+  adresse:"",code_postal:"",ville:"",pays:"France",
+  profession:"",niveau_etude:"",langue_parlee:"",groupe_sanguin:"",handicap:"Non",
+  lien_village:"Père",enfant_de:"",parrain:"",
+  photo:"",date_inscription:"",date_fin_adhesion:"",numero_carte:"",
+  notes_internes:"",actif:true
+};
+
+// Colonnes export complet
+const SORTISSANT_COLS = [
+  {key:"id_personne",label:"N° Sortissant"},{key:"prenom",label:"Prénom"},{key:"nom",label:"Nom"},
+  {key:"surnom",label:"Surnom"},{key:"genre",label:"Genre"},{key:"statut",label:"Statut"},
+  {key:"date_naissance",label:"Date naissance"},{key:"lieu_naissance",label:"Lieu naissance"},
+  {key:"nationalite",label:"Nationalité"},{key:"tranche_age",label:"Tranche âge"},
+  {key:"region",label:"Région"},{key:"adresse",label:"Adresse"},{key:"code_postal",label:"Code postal"},
+  {key:"ville",label:"Ville"},{key:"pays",label:"Pays"},
+  {key:"telephone",label:"Téléphone"},{key:"telephone2",label:"Téléphone 2"},{key:"email",label:"Email"},
+  {key:"situation_matrimoniale",label:"Situation matrimoniale"},{key:"nom_conjoint",label:"Conjoint"},
+  {key:"origine_conjoint",label:"Origine conjoint"},{key:"nb_enfants",label:"Nb enfants"},
+  {key:"profession",label:"Profession"},{key:"niveau_etude",label:"Niveau étude"},
+  {key:"langue_parlee",label:"Langues"},{key:"groupe_sanguin",label:"Groupe sanguin"},
+  {key:"handicap",label:"Handicap"},{key:"lien_village",label:"Lien village"},
+  {key:"enfant_de",label:"Enfant de"},{key:"parrain",label:"Parrain/Marraine"},
+  {key:"cotisation_obligatoire",label:"Cotisation obligatoire"},
+  {key:"montant_cotisation_perso",label:"Montant perso"},
+  {key:"date_inscription",label:"Date inscription"},{key:"date_fin_adhesion",label:"Fin adhésion"},
+  {key:"numero_carte",label:"N° Carte"},{key:"actif",label:"Actif"},{key:"notes_internes",label:"Notes"}
+];
+
+const exportXLSX_sortissants = async (personnes) => {
+  const XL = await loadXLSX();
+  const ws_data = [SORTISSANT_COLS.map(c=>c.label), ...personnes.map(p=>SORTISSANT_COLS.map(c=>p[c.key]??''))];
+  const ws = XL.utils.aoa_to_sheet(ws_data);
+  // Column widths
+  ws['!cols'] = SORTISSANT_COLS.map(c=>({wch:Math.max(c.label.length,14)}));
+  const wb = XL.utils.book_new();
+  XL.utils.book_append_sheet(wb, ws, "Sortissants");
+  XL.writeFile(wb, `sortissants_${new Date().toISOString().slice(0,10)}.xlsx`);
+};
+
+const importXLSX_importSortissants = async (file, existingPersonnes, onImport) => {
+  const XL = await loadXLSX();
+  const data = await file.arrayBuffer();
+  const wb = XL.read(data, {type:'array'});
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XL.utils.sheet_to_json(ws, {header:1});
+  if (rows.length < 2) { alert("Fichier vide ou format incorrect."); return; }
+  const headers = rows[0].map(h=>(h||'').toString().trim());
+  // Map headers to keys
+  const colMap = {};
+  SORTISSANT_COLS.forEach(c=>{ const idx=headers.findIndex(h=>h===c.label||h===c.key); if(idx>=0) colMap[c.key]=idx; });
+  const imported = [];
+  for(let i=1;i<rows.length;i++){
+    const row=rows[i];
+    if(!row || row.every(c=>!c)) continue;
+    const p = {...SORTISSANT_EMPTY};
+    SORTISSANT_COLS.forEach(c=>{ if(colMap[c.key]!==undefined && row[colMap[c.key]]!==undefined) p[c.key]=String(row[colMap[c.key]]||''); });
+    if(!p.prenom && !p.nom) continue;
+    // Generate id if missing
+    if(!p.id_personne) p.id_personne=(p.genre==='Femme'?'F':'H')+String(existingPersonnes.length+imported.length+1).padStart(3,'0');
+    p.id = Date.now()+i;
+    p.actif = p.actif!=='false' && p.actif!=='Non';
+    imported.push(p);
+  }
+  if(imported.length===0){alert("Aucun sortissant valide trouvé dans le fichier.");return;}
+  onImport(imported);
+};
+
+const Sortissants = ({ data, setData, showToast }) => {
+  const efS = {...SORTISSANT_EMPTY, date_inscription: today()};
+  const [form, setForm] = useState(efS);
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [search, setSearch] = useState("");
+  const [filterRegion, setFilterRegion] = useState("");
+  const [filterSex, setFilterSex] = useState("");
+  const [filterStatut, setFilterStatut] = useState("");
+  const [filterActif, setFilterActif] = useState("");
+  const [carteModal, setCarteModal] = useState(null);
+  const [viewModal, setViewModal] = useState(null);
+  const [importModal, setImportModal] = useState(false);
+  const [ongletForm, setOngletForm] = useState("identite");
+  const importRef = useRef();
+  const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
+  const genPersId = () => { const prefix = form.genre === "Femme" ? "F" : "H"; return `${prefix}${String(data.sortissants.length + 1).padStart(3, "0")}`; };
+  const genCarte = () => `CARTE-${new Date().getFullYear()}-${String(data.sortissants.length + 1).padStart(3, "0")}`;
+
+  const save = () => {
+    if (!form.prenom?.trim() || !form.nom?.trim()) { alert("Prénom et Nom obligatoires."); return; }
+    if (!form.genre) { alert("Le genre est obligatoire."); return; }
+    if (editing) {
+      setData(d => ({ ...d, sortissants: d.sortissants.map(p => p.id === editing ? { ...p, ...form } : p) }));
+      showToast("Sortissant modifié !");
+    } else {
+      const newP = { id: genId(), ...form, id_personne: form.id_personne || genPersId(), numero_carte: form.numero_carte || genCarte() };
+      setData(d => ({ ...d, sortissants: [...d.sortissants, newP] }));
+      showToast("Sortissant ajouté !");
+    }
+    setModal(false); setEditing(null); setForm(efS);
+  };
+
+  const filtered = data.sortissants.filter(p => {
+    const q = search.toLowerCase();
+    if (q && !`${p.prenom} ${p.nom} ${p.id_personne} ${p.ville||''} ${p.telephone||''} ${p.email||''}`.toLowerCase().includes(q)) return false;
+    if (filterRegion && p.region !== filterRegion) return false;
+    if (filterSex && p.genre !== filterSex) return false;
+    if (filterStatut && p.statut !== filterStatut) return false;
+    if (filterActif === "actif" && p.actif === false) return false;
+    if (filterActif === "inactif" && p.actif !== false) return false;
+    return true;
+  });
+
+  const openEdit = p => {
+    setEditing(p.id);
+    setForm({...SORTISSANT_EMPTY, ...p});
+    setOngletForm("identite");
+    setModal(true);
+  };
+
+  const parents = data.sortissants.filter(p => p.statut === "Majeur").map(p => `${p.prenom} ${p.nom}`);
+
+  const TABS_FORM = [
+    { id:"identite", label:"👤 Identité" },
+    { id:"contact", label:"📞 Contact" },
+    { id:"famille", label:"👨‍👩‍👦 Famille" },
+    { id:"adhesion", label:"📋 Adhésion" },
+    { id:"notes", label:"📝 Notes" },
+  ];
+
+  return (
+    <div className="fade-up">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+        <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>🏘️ Sortissants de Hambou</h2><p style={{ color: T.muted, fontSize: 13 }}>{data.sortissants.length} sortissant(s) · {filtered.length} affiché(s)</p></div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Btn label="📥 Importer XLSX" variant="ghost" onClick={() => setImportModal(true)} />
+          <Btn label="📤 Export XLSX" variant="teal" onClick={() => exportXLSX_sortissants(filtered).catch(e=>alert("Erreur export: "+e))} />
+          <Btn label="📤 CSV" variant="ghost" onClick={() => exportCSV(filtered, SORTISSANT_COLS.slice(0,14), "sortissants")} />
+          <Btn label="➕ Ajouter" variant="success" onClick={() => { setEditing(null); setForm({...efS}); setOngletForm("identite"); setModal(true); }} />
+        </div>
+      </div>
+
+      {/* Filtres */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Nom, prénom, téléphone, email…" style={{ flex: 1, minWidth: 180, padding: "8px 13px", borderRadius: 8, border: B15, fontSize: 13, fontFamily: FS.B, outline: "none" }} />
+        <select value={filterRegion} onChange={e => setFilterRegion(e.target.value)} style={{ padding: "8px 11px", borderRadius: 8, border: B15, fontSize: 13, fontFamily: FS.B }}>
+          <option value="">Toutes régions</option>
+          {[...new Set(data.sortissants.map(p => p.region).filter(Boolean))].sort().map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+        <select value={filterSex} onChange={e => setFilterSex(e.target.value)} style={{ padding: "8px 11px", borderRadius: 8, border: B15, fontSize: 13, fontFamily: FS.B }}>
+          <option value="">Tous genres</option><option value="Homme">Homme</option><option value="Femme">Femme</option>
+        </select>
+        <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} style={{ padding: "8px 11px", borderRadius: 8, border: B15, fontSize: 13, fontFamily: FS.B }}>
+          <option value="">Tous statuts</option><option value="Majeur">Majeur</option><option value="Mineur">Mineur</option>
+        </select>
+        <select value={filterActif} onChange={e => setFilterActif(e.target.value)} style={{ padding: "8px 11px", borderRadius: 8, border: B15, fontSize: 13, fontFamily: FS.B }}>
+          <option value="">Actif & Inactif</option><option value="actif">Actifs seulement</option><option value="inactif">Inactifs</option>
+        </select>
+      </div>
+
+      <Card>
+        <Table
+          cols={[
+            { key: "photo", label: "Photo", render: (v, row) => <div style={{ width: 34, height: 34, borderRadius: 8, overflow: "hidden", background: T.light, display: "flex", alignItems: "center", justifyContent: "center" }}>{v ? <img src={v} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 18 }}>{row.genre === "Homme" ? "👨" : "👩"}</span>}</div> },
+            { key: "id_personne", label: "N°", render: v => <Chip text={v} variant="blue" /> },
+            { key: "prenom", label: "Prénom" },
+            { key: "nom", label: "Nom", render: v => <strong>{v}</strong> },
+            { key: "genre", label: "Genre", render: v => <Chip text={v} variant={v === "Homme" ? "blue" : "violet"} /> },
+            { key: "statut", label: "Statut", render: v => <Chip text={v} variant={v === "Majeur" ? "green" : "amber"} /> },
+            { key: "region", label: "Région" },
+            { key: "ville", label: "Ville" },
+            { key: "telephone", label: "Tél." },
+            { key: "profession", label: "Profession" },
+            { key: "cotisation_obligatoire", label: "Cotis.", render: v => <Chip text={v === "Oui" ? "✓ Oui" : "Exempté"} variant={v === "Oui" ? "green" : "gray"} /> },
+            { key: "actif", label: "Statut compte", render: v => <Chip text={v===false?"Inactif":"Actif"} variant={v===false?"red":"green"} /> },
+          ]}
+          rows={filtered}
+          onView={row => setViewModal(row)}
+          onExtra={row => <Btn label="🪪" title="Carte" variant="teal" sm onClick={() => setCarteModal(row)} />}
+          onEdit={openEdit}
+          onDelete={id => { setData(d => ({ ...d, sortissants: d.sortissants.filter(p => p.id !== id) })); showToast("Sortissant supprimé.", "error"); }}
+        />
+      </Card>
+
+      {/* Modal Import */}
+      {importModal && (
+        <Modal title="📥 Importer des sortissants (XLSX / CSV)" onClose={() => setImportModal(false)} wide>
+          <div style={{ padding: 12, background: T.sky, borderRadius: 9, marginBottom: 16, fontSize: 13, color: T.blue }}>
+            <strong>Format attendu :</strong> La première ligne doit contenir les en-têtes de colonnes. Colonnes supportées : Prénom, Nom, Genre, Région, Téléphone, Email, Statut, Date naissance, Lieu naissance, Nationalité, Adresse, Ville, Code postal, Profession, etc.<br/>
+            <a href="#" onClick={async e => { e.preventDefault(); const XL=await loadXLSX(); const ws=XL.utils.aoa_to_sheet([SORTISSANT_COLS.map(c=>c.label),[...SORTISSANT_COLS.map(()=>'')]]); const wb=XL.utils.book_new(); XL.utils.book_append_sheet(wb,ws,"Sortissants"); XL.writeFile(wb,'modele_import_sortissants.xlsx'); }} style={{ color: T.blue, fontWeight: 700 }}>⬇️ Télécharger le modèle Excel</a>
+          </div>
+          <div style={{ border: `2px dashed ${T.border}`, borderRadius: 10, padding: 28, textAlign: "center", cursor: "pointer", background: T.light }}
+            onClick={() => importRef.current.click()}>
+            <div style={{ fontSize: 36, marginBottom: 8 }}>📂</div>
+            <div style={{ fontSize: 14, color: T.muted, fontWeight: 600 }}>Cliquer pour sélectionner un fichier XLSX ou CSV</div>
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>Formats acceptés : .xlsx, .xls, .csv</div>
+          </div>
+          <input ref={importRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+            onChange={async e => {
+              const file = e.target.files[0]; if (!file) return;
+              await importXLSX_importSortissants(file, data.sortissants, imported => {
+                setData(d => ({ ...d, sortissants: [...(d.sortissants||[]), ...imported] }));
+                showToast(`${imported.length} sortissant(s) importé(s) !`);
+                setImportModal(false);
+              });
+              e.target.value = "";
+            }} />
+          <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+            <Btn label="Fermer" variant="ghost" onClick={() => setImportModal(false)} />
+          </div>
+        </Modal>
+      )}
+
+      {/* Carte modal */}
+      {carteModal && (
+        <Modal title={`🪪 Carte — ${carteModal.prenom} ${carteModal.nom}`} onClose={() => setCarteModal(null)} wide>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+            <CarteAdherent personne={carteModal} config={data.config} cotisations={data.cotisations} />
+          </div>
+          <div style={{ textAlign: "center", marginBottom: 14, color: T.muted, fontSize: 12 }}>N° Carte : <strong style={{ color: T.navy }}>{carteModal.numero_carte || "Non attribué"}</strong></div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+            <Btn label="🖨️ Imprimer" variant="dark" onClick={() => { try { window.print(); } catch(e) { alert('Utilisez Ctrl+P pour imprimer'); } }} />
+            <Btn label="Fermer" variant="ghost" onClick={() => setCarteModal(null)} />
+          </div>
+        </Modal>
+      )}
+
+      {/* View modal */}
+      {viewModal && (
+        <Modal title={`👤 ${viewModal.prenom} ${viewModal.nom}`} onClose={() => setViewModal(null)} extraWide>
+          <div style={{ display: "flex", gap: 20, alignItems: "flex-start", marginBottom: 16 }}>
+            <div style={{ flexShrink: 0 }}>
+              <div style={{ width: 100, height: 100, borderRadius: 16, overflow: "hidden", background: T.light, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 48, border: `2px solid ${T.border}` }}>
+                {viewModal.photo ? <img src={viewModal.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : (viewModal.genre === "Homme" ? "👨" : "👩")}
+              </div>
+              <div style={{ textAlign: "center", marginTop: 8 }}><Chip text={viewModal.actif===false?"Inactif":"Actif"} variant={viewModal.actif===false?"red":"green"} /></div>
+            </div>
+            <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" }}>
+              {[["N° Sortissant",viewModal.id_personne],["Genre",viewModal.genre],["Statut",viewModal.statut],
+                ["Date naissance",viewModal.date_naissance||"—"],["Lieu naissance",viewModal.lieu_naissance||"—"],["Nationalité",viewModal.nationalite||"—"],
+                ["Téléphone",viewModal.telephone||"—"],["Tél. 2",viewModal.telephone2||"—"],["Email",viewModal.email||"—"],
+                ["Adresse",viewModal.adresse||"—"],["Ville",viewModal.ville||"—"],["Code postal",viewModal.code_postal||"—"],
+                ["Région",viewModal.region||"—"],["Pays",viewModal.pays||"—"],["Profession",viewModal.profession||"—"],
+                ["Niveau étude",viewModal.niveau_etude||"—"],["Langues",viewModal.langue_parlee||"—"],["Groupe sanguin",viewModal.groupe_sanguin||"—"],
+                ["Situation",viewModal.situation_matrimoniale||"—"],["Conjoint",viewModal.nom_conjoint||"—"],["Nb enfants",viewModal.nb_enfants||"0"],
+                ["Lien village",viewModal.lien_village||"—"],["Enfant de",viewModal.enfant_de||"—"],["Parrain",viewModal.parrain||"—"],
+                ["Cotisation",viewModal.cotisation_obligatoire||"—"],["Inscription",viewModal.date_inscription||"—"],["N° Carte",viewModal.numero_carte||"—"],
+              ].map(([k, v]) => (
+                <div key={k} style={{ padding: "6px 10px", background: T.light, borderRadius: 7 }}>
+                  <div style={{ fontSize: 10, color: T.muted, fontWeight: 600, marginBottom: 2 }}>{k}</div>
+                  <div style={{ fontSize: 12, color: T.dark, fontWeight: 500, wordBreak: "break-word" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {viewModal.notes_internes && <div style={{ padding: "10px 14px", background: T.sand, borderRadius: 8, fontSize: 13, color: T.amber, marginBottom: 10 }}><strong>📝 Notes :</strong> {viewModal.notes_internes}</div>}
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <Btn label="✏️ Modifier" variant="ghost" onClick={() => { setViewModal(null); openEdit(viewModal); }} />
+            <Btn label="🪪 Carte" variant="teal" onClick={() => { setViewModal(null); setCarteModal(viewModal); }} />
+            <Btn label="Fermer" variant="dark" onClick={() => setViewModal(null)} />
+          </div>
+        </Modal>
+      )}
+
+      {/* Add/Edit modal with tabs */}
+      {modal && (
+        <Modal title={editing ? "✏️ Modifier le sortissant" : "➕ Ajouter un sortissant"} onClose={() => { setModal(false); setEditing(null); }} extraWide>
+          <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 18 }}>
+            {/* Photo column */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: T.muted }}>Photo</label>
+              <PhotoUpload value={form.photo} onChange={v => f("photo", v)} size={100} />
+              <Field label="N° Carte" value={form.numero_carte} onChange={v => f("numero_carte", v)} placeholder={genCarte()} />
+              <div style={{ marginBottom: 4 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, fontWeight: 600, color: T.text }}>
+                  <input type="checkbox" checked={form.actif !== false} onChange={e => f("actif", e.target.checked)} /> Actif
+                </label>
+              </div>
+            </div>
+            {/* Form tabs */}
+            <div>
+              <div style={{ display: "flex", gap: 2, marginBottom: 14, background: T.light, borderRadius: 8, padding: 3, border: B1, flexWrap: "wrap" }}>
+                {TABS_FORM.map(t => (
+                  <button key={t.id} onClick={() => setOngletForm(t.id)} style={{ padding: "5px 12px", borderRadius: 6, border: "none", fontFamily: FS.B, fontWeight: 600, fontSize: 11, cursor: "pointer", background: ongletForm === t.id ? T.white : "transparent", color: ongletForm === t.id ? T.navy : T.muted, boxShadow: ongletForm === t.id ? "0 1px 4px rgba(0,0,0,.1)" : "none", whiteSpace: "nowrap" }}>{t.label}</button>
+                ))}
+              </div>
+
+              {ongletForm === "identite" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
+                  <Field label="Prénom" value={form.prenom} onChange={v => f("prenom", v)} required />
+                  <Field label="Nom" value={form.nom} onChange={v => f("nom", v)} required />
+                  <Field label="Surnom / Alias" value={form.surnom} onChange={v => f("surnom", v)} />
+                  <Field label="N° sortissant" value={form.id_personne} onChange={v => f("id_personne", v)} placeholder={genPersId()} />
+                  <Field label="Genre" value={form.genre} onChange={v => f("genre", v)} options={["Homme","Femme"]} required />
+                  <Field label="Statut" value={form.statut} onChange={v => f("statut", v)} options={["Majeur","Mineur"]} />
+                  <Field label="Date de naissance" value={form.date_naissance} onChange={v => f("date_naissance", v)} type="date" />
+                  <Field label="Lieu de naissance" value={form.lieu_naissance} onChange={v => f("lieu_naissance", v)} />
+                  <Field label="Nationalité" value={form.nationalite} onChange={v => f("nationalite", v)} options={["Française","Comorienne","Franco-Comorienne","Mahoraise","Autre"]} />
+                  <Field label="Tranche d'âge" value={form.tranche_age} onChange={v => f("tranche_age", v)} options={["0-10","10-20","20-30","30-40","40-50","50-60","+60"]} />
+                  <Field label="Groupe sanguin" value={form.groupe_sanguin} onChange={v => f("groupe_sanguin", v)} options={["A+","A-","B+","B-","AB+","AB-","O+","O-","Inconnu"]} />
+                  <Field label="Handicap / Situation particulière" value={form.handicap} onChange={v => f("handicap", v)} options={["Non","Oui - physique","Oui - mental","Autre"]} />
+                </div>
+              )}
+
+              {ongletForm === "contact" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
+                  <Field label="Téléphone principal" value={form.telephone} onChange={v => f("telephone", v)} />
+                  <Field label="Téléphone 2" value={form.telephone2} onChange={v => f("telephone2", v)} />
+                  <Field label="Email" value={form.email} onChange={v => f("email", v)} type="email" />
+                  <Field label="Pays" value={form.pays} onChange={v => f("pays", v)} options={["France","Comores","Mayotte","Autre"]} />
+                  <Field label="Adresse" value={form.adresse} onChange={v => f("adresse", v)} />
+                  <Field label="Code postal" value={form.code_postal} onChange={v => f("code_postal", v)} />
+                  <Field label="Ville" value={form.ville} onChange={v => f("ville", v)} />
+                  <Field label="Région / Zone" value={form.region} onChange={v => f("region", v)} options={data.config?.regions || REGIONS} />
+                  <Field label="Profession" value={form.profession} onChange={v => f("profession", v)} />
+                  <Field label="Niveau d'étude" value={form.niveau_etude} onChange={v => f("niveau_etude", v)} options={["Sans diplôme","CAP/BEP","Bac","Bac+2","Bac+3","Bac+4","Bac+5","Doctorat","Autre"]} />
+                  <Field label="Langue(s) parlée(s)" value={form.langue_parlee} onChange={v => f("langue_parlee", v)} placeholder="Français, Comorien, Arabe…" />
+                </div>
+              )}
+
+              {ongletForm === "famille" && (
+                <div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
+                    <Field label="Situation matrimoniale" value={form.situation_matrimoniale} onChange={v => { f("situation_matrimoniale", v); if(v!=="Marié(e)") f("origine_conjoint",""); }} options={["Célibataire","Marié(e)","Divorcé(e)","Veuf/Veuve","Union libre"]} />
+                    <Field label="Nom du conjoint" value={form.nom_conjoint} onChange={v => f("nom_conjoint", v)} />
+                    <Field label="Nb enfants" value={form.nb_enfants} onChange={v => f("nb_enfants", v)} type="number" />
+                    <Field label="Lien village" value={form.lien_village} onChange={v => f("lien_village", v)} options={["Père","Mère","Les deux","Autre"]} />
+                  </div>
+                  {form.situation_matrimoniale === "Marié(e)" && (
+                    <div style={{ marginBottom: 12, padding: 12, background: "#FFF7ED", borderRadius: 10, border: "1.5px solid #FED7AA" }}>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#EA580C", marginBottom: 8 }}>💑 Origine du conjoint</label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {["Interne","Externe"].map(opt => (
+                          <button key={opt} onClick={() => f("origine_conjoint", opt)} style={{ flex: 1, padding: "10px", borderRadius: 9, border: `2px solid ${form.origine_conjoint===opt?"#EA580C":T.border}`, background: form.origine_conjoint===opt?"#FFF7ED":T.white, cursor: "pointer", fontFamily: FS.B, fontWeight: 700, fontSize: 13, color: form.origine_conjoint===opt?"#EA580C":T.muted }}>{opt==="Interne"?"🏘️ Interne":"🌍 Externe"}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginBottom: 12, padding: 12, background: T.lavender, borderRadius: 10 }}>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.violet, marginBottom: 6 }}>👨‍👩‍👦 Enfant de</label>
+                    <select value={form.enfant_de||""} onChange={e => f("enfant_de", e.target.value)} style={{ width: "100%", padding: "8px 11px", borderRadius: 7, border: B15, fontSize: 13, fontFamily: FS.B, background: T.white, outline: "none" }}>
+                      <option value="">— Aucun —</option>
+                      {parents.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </div>
+                  <Field label="Parrain / Marraine" value={form.parrain} onChange={v => f("parrain", v)} />
+                </div>
+              )}
+
+              {ongletForm === "adhesion" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 18px" }}>
+                  <Field label="Cotisation obligatoire" value={form.cotisation_obligatoire} onChange={v => f("cotisation_obligatoire", v)} options={["Oui","Non"]} />
+                  <Field label="Montant perso (€)" value={form.montant_cotisation_perso} onChange={v => f("montant_cotisation_perso", v)} type="number" placeholder={`Défaut : ${data.config?.montant_cotisation||10}`} />
+                  <Field label="Date d'inscription" value={form.date_inscription} onChange={v => f("date_inscription", v)} type="date" />
+                  <Field label="Date fin adhésion" value={form.date_fin_adhesion} onChange={v => f("date_fin_adhesion", v)} type="date" />
+                  <Field label="N° Carte sortissant" value={form.numero_carte} onChange={v => f("numero_carte", v)} placeholder={genCarte()} />
+                </div>
+              )}
+
+              {ongletForm === "notes" && (
+                <Field label="Notes internes (non visibles par le sortissant)" value={form.notes_internes} onChange={v => f("notes_internes", v)} type="textarea" rows={5} placeholder="Remarques, historique, informations particulières…" />
+              )}
+            </div>
+          </div>
+          <ModalFooter onCancel={() => { setModal(false); setEditing(null); }} onSave={save} saveLabel={editing ? "💾 Enregistrer les modifications" : "➕ Ajouter le sortissant"} />
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════
+
 // MODULE 3 — COTISATIONS
 // ═══════════════════════════════════════════════════════════════════
 const Cotisations = ({ data, setData, showToast }) => {
@@ -2385,48 +2784,120 @@ const Dons = ({ data, setData, showToast }) => {
 // MODULE 7 — BUDGET
 // ═══════════════════════════════════════════════════════════════════
 const Budget = ({ data, setData, showToast }) => {
-  const ef = { annee: "2025", poste: "", montant_prevu: "" };
+  const ef = { annee: String(new Date().getFullYear()), poste: "", montant_prevu: "", montant_realise: "" };
   const [form, setForm] = useState(ef);
   const [modal, setModal] = useState(false);
   const [editId, setEditId] = useState(null);
+  const [anneeFilter, setAnneeFilter] = useState(String(new Date().getFullYear()));
   const f = (k, v) => setForm(p => ({ ...p, [k]: v }));
+
   const rows = data.budget.map(b => {
-    const realise = data.finances.filter(x => x.annee === Number(b.annee) && x.categorie === b.poste).reduce((s, x) => s + (x.type_operation === "Recette" ? Number(x.montant) : -Number(x.montant)), 0);
-    const taux = b.montant_prevu > 0 ? Math.min(100, Math.round(Math.abs(realise) / b.montant_prevu * 100)) : 0;
-    return { ...b, realise, ecart: b.montant_prevu - Math.abs(realise), taux };
+    const realiseFinance = data.finances
+      .filter(x => x.annee === Number(b.annee) && x.categorie === b.poste)
+      .reduce((s, x) => s + (x.type_operation === "Recette" ? Number(x.montant) : -Number(x.montant)), 0);
+    const realise = Number(b.montant_realise) > 0 ? Number(b.montant_realise) : Math.abs(realiseFinance);
+    const taux = b.montant_prevu > 0 ? Math.min(100, Math.round(realise / b.montant_prevu * 100)) : 0;
+    return { ...b, realise, ecart: Number(b.montant_prevu) - realise, taux };
   });
+
+  const annees = [...new Set(data.budget.map(b => String(b.annee)))].sort().reverse();
+  const rowsFiltres = rows.filter(b => String(b.annee) === anneeFilter);
+  const totalPrevu   = rowsFiltres.reduce((s, b) => s + Number(b.montant_prevu), 0);
+  const totalRealise = rowsFiltres.reduce((s, b) => s + b.realise, 0);
+
   const save = () => {
-    if (!form.poste) { alert("Poste budgétaire obligatoire."); return; }
-    if (!form.montant_prevu || Number(form.montant_prevu) <= 0) { alert("Montant prévu invalide."); return; }
+    if (!form.poste) { showToast("Poste budgétaire obligatoire.", "error"); return; }
+    if (!form.montant_prevu || Number(form.montant_prevu) <= 0) { showToast("Montant prévu invalide.", "error"); return; }
+    const obj = { ...form, montant_prevu: Number(form.montant_prevu), montant_realise: Number(form.montant_realise) || 0, annee: Number(form.annee) };
     if (editId) {
-      setData(d => ({ ...d, budget: d.budget.map(b => b.id === editId ? { ...b, ...form, montant_prevu: Number(form.montant_prevu), annee: Number(form.annee) } : b) }));
+      setData(d => ({ ...d, budget: d.budget.map(b => b.id === editId ? { ...b, ...obj } : b) }));
     } else {
-      setData(d => ({ ...d, budget: [...d.budget, { id: genId(), ...form, montant_prevu: Number(form.montant_prevu), annee: Number(form.annee) }] }));
+      setData(d => ({ ...d, budget: [...d.budget, { id: genId(), ...obj }] }));
     }
     showToast(editId ? "Poste budgétaire modifié !" : "Poste budgétaire ajouté !");
     setModal(false); setEditId(null); setForm(ef);
   };
+
+  const thStyle = { background: T.navy, color: "#fff", padding: "9px 14px", fontSize: 12, fontWeight: 700, fontFamily: FS.S, textAlign: "left", borderRight: "1px solid rgba(255,255,255,.15)" };
+  const tdStyle = (i) => ({ padding: "8px 14px", fontSize: 13, borderBottom: B1, background: i % 2 === 0 ? "#fff" : "#F8FAFC", borderRight: "1px solid #E5E7EB" });
+  const totalRowStyle = { padding: "9px 14px", fontSize: 13, fontWeight: 800, fontFamily: FS.S, background: "#EEF2FF", borderRight: "1px solid #C7D2FE", color: T.navy };
+
   return (
     <div className="fade-up">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
-        <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>📋 Budget prévisionnel</h2><p style={{ color: T.muted, fontSize: 13 }}>Suivi prévu vs réalisé</p></div>
+        <div>
+          <h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>📋 Budget prévisionnel</h2>
+          <p style={{ color: T.muted, fontSize: 13 }}>Suivi prévu vs réalisé · Année :
+            <select value={anneeFilter} onChange={e => setAnneeFilter(e.target.value)}
+              style={{ marginLeft: 8, border: B1, borderRadius: 6, padding: "2px 8px", fontSize: 13, color: T.dark }}>
+              {annees.length === 0 ? <option>{new Date().getFullYear()}</option> : annees.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </p>
+        </div>
         <Btn label="➕ Ajouter un poste" variant="success" onClick={() => { setEditId(null); setForm(ef); setModal(true); }} />
       </div>
+
+      {/* ── TABLEAU RÉCAPITULATIF style Excel ── */}
+      {rowsFiltres.length > 0 && (
+        <Card style={{ marginBottom: 20, padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px 10px", fontWeight: 800, fontSize: 13, fontFamily: FS.S, color: T.navy, borderBottom: B1 }}>
+            📊 Montant et pourcentage du budget {anneeFilter}
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ ...thStyle, minWidth: 160 }}>Libellés</th>
+                  <th style={{ ...thStyle, textAlign: "center", minWidth: 110 }}>Pourcentage</th>
+                  <th style={{ ...thStyle, textAlign: "right", minWidth: 110 }}>Montant (€)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rowsFiltres.map((b, i) => {
+                  const pct = totalPrevu > 0 ? Math.round(Number(b.montant_prevu) / totalPrevu * 100) : 0;
+                  return (
+                    <tr key={b.id}>
+                      <td style={tdStyle(i)}>{b.poste}</td>
+                      <td style={{ ...tdStyle(i), textAlign: "center" }}>{pct}%</td>
+                      <td style={{ ...tdStyle(i), textAlign: "right", fontWeight: 600 }}>{Number(b.montant_prevu).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td style={totalRowStyle}>TOTAL</td>
+                  <td style={{ ...totalRowStyle, textAlign: "center" }}>100%</td>
+                  <td style={{ ...totalRowStyle, textAlign: "right" }}>{totalPrevu.toLocaleString()}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div style={{ display: "flex", gap: 24, padding: "10px 16px", borderTop: B1, background: "#F8FAFC", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: T.muted }}>Total prévu : <strong style={{ color: T.navy }}>{totalPrevu.toLocaleString()} €</strong></span>
+            <span style={{ fontSize: 12, color: T.muted }}>Total réalisé : <strong style={{ color: T.emerald }}>{totalRealise.toLocaleString()} €</strong></span>
+            <span style={{ fontSize: 12, color: T.muted }}>Écart : <strong style={{ color: totalPrevu - totalRealise >= 0 ? T.emerald : T.red }}>{totalPrevu > 0 ? (totalPrevu - totalRealise >= 0 ? "+" : "") + (totalPrevu - totalRealise).toLocaleString() : "—"} €</strong></span>
+          </div>
+        </Card>
+      )}
+
+      {/* ── CARTES DÉTAIL ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {rows.map(b => (
+        {rowsFiltres.map(b => (
           <Card key={b.id}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
               <div>
                 <h4 style={{ fontFamily: FS.S, fontSize: 14, fontWeight: 700, color: T.dark, marginBottom: 4 }}>{b.poste} <Chip text={`${b.annee}`} variant="gray" /></h4>
-                <div style={{ display: "flex", gap: 16, fontSize: 13 }}>
-                  <span style={{ color: T.muted }}>Prévu : <strong>{b.montant_prevu} €</strong></span>
-                  <span style={{ color: T.muted }}>Réalisé : <strong style={{ color: T.emerald }}>{Math.abs(b.realise)} €</strong></span>
-                  <span style={{ color: T.muted }}>Écart : <strong style={{ color: b.ecart >= 0 ? T.emerald : T.red }}>{b.ecart >= 0 ? "+" : ""}{b.ecart} €</strong></span>
+                <div style={{ display: "flex", gap: 16, fontSize: 13, flexWrap: "wrap" }}>
+                  <span style={{ color: T.muted }}>Prévu : <strong>{Number(b.montant_prevu).toLocaleString()} €</strong></span>
+                  <span style={{ color: T.muted }}>Réalisé : <strong style={{ color: T.emerald }}>{b.realise.toLocaleString()} €</strong></span>
+                  <span style={{ color: T.muted }}>Écart : <strong style={{ color: b.ecart >= 0 ? T.emerald : T.red }}>{b.ecart >= 0 ? "+" : ""}{b.ecart.toLocaleString()} €</strong></span>
+                  {Number(b.montant_realise) > 0 && <Chip text="✏️ Réalisé manuel" variant="gray" />}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Chip text={b.taux > 90 ? "⚠️ Alerte" : b.taux > 50 ? "En cours" : "✓ OK"} variant={b.taux > 90 ? "red" : b.taux > 50 ? "amber" : "green"} />
-                <Btn label="✏️" variant="ghost" sm onClick={() => { setForm({ annee: String(b.annee), poste: b.poste, montant_prevu: String(b.montant_prevu) }); setEditId(b.id); setModal(true); }} />
+                <Btn label="✏️" variant="ghost" sm onClick={() => { setForm({ annee: String(b.annee), poste: b.poste, montant_prevu: String(b.montant_prevu), montant_realise: String(b.montant_realise || "") }); setEditId(b.id); setModal(true); }} />
                 <Btn label="🗑️" variant="danger" sm onClick={() => { if (!window.confirm || window.confirm("Supprimer ?")) { setData(d => ({ ...d, budget: d.budget.filter(x => x.id !== b.id) })); showToast("Poste supprimé.", "error"); } }} />
               </div>
             </div>
@@ -2438,13 +2909,23 @@ const Budget = ({ data, setData, showToast }) => {
             </div>
           </Card>
         ))}
-        {rows.length === 0 && <Card><p style={{ textAlign: "center", color: T.muted, padding: 24 }}>Aucun poste budgétaire</p></Card>}
+        {rowsFiltres.length === 0 && (
+          <Card><p style={{ textAlign: "center", color: T.muted, padding: 24 }}>
+            {data.budget.length === 0 ? "Aucun poste budgétaire" : `Aucun poste pour ${anneeFilter}`}
+          </p></Card>
+        )}
       </div>
+
+      {/* ── MODAL ── */}
       {modal && (
         <Modal title={editId ? "✏️ Modifier le poste" : "➕ Nouveau poste budgétaire"} onClose={() => { setModal(false); setEditId(null); }} wide>
           <Field label="Poste budgétaire" value={form.poste} onChange={v => f("poste", v)} options={["Cotisations", "Projets", "Frais divers", "Avocat", "Mosquée", "Formation", "Communication", "Transport", "Hébergement", "Équipement", "Autre"]} required />
+          <Field label="Année" value={form.annee} onChange={v => f("annee", v)} options={["2024", "2025", "2026", "2027"]} />
           <Field label="Montant prévu (€)" value={form.montant_prevu} onChange={v => f("montant_prevu", v)} type="number" required />
-          <Field label="Année" value={form.annee} onChange={v => f("annee", v)} options={["2024", "2025", "2026"]} />
+          <Field label="Montant réalisé (€)" value={form.montant_realise} onChange={v => f("montant_realise", v)} type="number" />
+          <div style={{ background: "#F0F9FF", border: "1px solid #BAE6FD", borderRadius: 8, padding: "9px 13px", fontSize: 12, color: "#0369A1", marginTop: 4 }}>
+            💡 Si le montant réalisé est renseigné, il remplace le calcul automatique depuis Finances. Laisser vide pour calcul auto.
+          </div>
           <ModalFooter onCancel={() => { setModal(false); setEditId(null); }} onSave={save} />
         </Modal>
       )}
@@ -5092,6 +5573,7 @@ const isReadOnly = (user) => user?.role === "Adhérent";
 const MODULES = [
   { id: "dashboard",       label: "Dashboard",         icon: "🏠", roles: ["Admin","Trésorier","Secrétaire","Lecture","Adhérent"] },
   { id: "recensement",     label: "Recensement",        icon: "👥", roles: ["Admin","Secrétaire"] },
+  { id: "sortissants",     label: "Sortissants Hambou", icon: "🏘️", roles: ["Admin","Secrétaire"] },
   { id: "cotisations",     label: "Cotisations",        icon: "💳", roles: ["Admin","Trésorier"] },
   { id: "finances",        label: "Finances",           icon: "📈", roles: ["Admin","Trésorier"] },
   { id: "bilan",           label: "Bilan Annuel",       icon: "📊", roles: ["Admin","Trésorier","Secrétaire","Adhérent"] },
@@ -5112,7 +5594,7 @@ const MODULES = [
 ];
 
 const GROUPS = [
-  { label: "Principal",  ids: ["dashboard", "recensement", "espace_adherent"] },
+  { label: "Principal",  ids: ["dashboard", "recensement", "sortissants", "espace_adherent"] },
   { label: "Finance",    ids: ["cotisations", "finances", "bilan", "dons", "budget"] },
   { label: "Activités",  ids: ["evenements", "reunions", "projets", "votes_ag"] },
   { label: "Outils",     ids: ["documents", "communication", "alertes", "statistiques", "mediatheque"] },
@@ -5385,6 +5867,7 @@ export default function App() {
     switch (page) {
       case "dashboard": return <Dashboard {...props} />;
       case "recensement": return <Recensement {...props} />;
+      case "sortissants": return <Sortissants {...props} />;
       case "cotisations": return <Cotisations {...props} />;
       case "finances": return <Finances {...props} />;
       case "bilan": return <Bilan {...props} />;
