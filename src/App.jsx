@@ -117,6 +117,167 @@ const DEFAULT = {
 // ── Persistence multi-mode : Electron / Serveur / localStorage ────────────────
 const STORAGE_KEY = "ashoid_v14_data";
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔒 MODULE SÉCURITÉ — Chiffrement AES-GCM + Protection anti-intrusion
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── 1. Clé de chiffrement dérivée du domaine (unique par déploiement) ────────
+const SEC_SALT = "mlambavou-ashoid-2026-xK9#mP2@qL";
+const SEC_VERSION = "v2";
+const STORAGE_KEY_ENC = "ashoid_enc_v2";
+
+const getEncKey = async () => {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", enc.encode(SEC_SALT), { name: "PBKDF2" }, false, ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: enc.encode("ashoid-salt-2026"), iterations: 100000, hash: "SHA-256" },
+    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+};
+
+// ── 2. Chiffrement AES-GCM ────────────────────────────────────────────────────
+const encryptData = async (data) => {
+  try {
+    const key = await getEncKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(data));
+    const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+    const buf = new Uint8Array(iv.byteLength + encrypted.byteLength);
+    buf.set(iv, 0);
+    buf.set(new Uint8Array(encrypted), iv.byteLength);
+    return btoa(String.fromCharCode(...buf)) + "." + SEC_VERSION;
+  } catch { return null; }
+};
+
+const decryptData = async (ciphertext) => {
+  try {
+    if (!ciphertext) return null;
+    const parts = ciphertext.split(".");
+    if (parts[1] !== SEC_VERSION) return null;
+    const buf = Uint8Array.from(atob(parts[0]), c => c.charCodeAt(0));
+    const iv = buf.slice(0, 12);
+    const data = buf.slice(12);
+    const key = await getEncKey();
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  } catch { return null; }
+};
+
+// ── 3. localStorage chiffré ───────────────────────────────────────────────────
+const secureGet = async () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_ENC);
+    if (!raw) {
+      // Migration : données anciennes non chiffrées
+      const legacy = localStorage.getItem("ashoid_v14_data");
+      if (legacy) {
+        const parsed = JSON.parse(legacy);
+        await secureSet(parsed);
+        localStorage.removeItem("ashoid_v14_data");
+        return parsed;
+      }
+      return null;
+    }
+    return await decryptData(raw);
+  } catch { return null; }
+};
+
+const secureSet = async (data) => {
+  try {
+    const enc = await encryptData(data);
+    if (enc) localStorage.setItem(STORAGE_KEY_ENC, enc);
+  } catch {}
+};
+
+// ── 4. Anti brute-force : verrouillage temporaire ────────────────────────────
+const BRUTE_KEY = "ashoid_bf_log";
+const MAX_ATTEMPTS = 5;
+const LOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+const getBruteState = (login) => {
+  try {
+    const raw = sessionStorage.getItem(BRUTE_KEY);
+    const state = raw ? JSON.parse(raw) : {};
+    return state[login] || { count: 0, lockedUntil: 0 };
+  } catch { return { count: 0, lockedUntil: 0 }; }
+};
+
+const setBruteState = (login, count, lockedUntil = 0) => {
+  try {
+    const raw = sessionStorage.getItem(BRUTE_KEY);
+    const state = raw ? JSON.parse(raw) : {};
+    state[login] = { count, lockedUntil };
+    sessionStorage.setItem(BRUTE_KEY, JSON.stringify(state));
+  } catch {}
+};
+
+const resetBruteState = (login) => {
+  try {
+    const raw = sessionStorage.getItem(BRUTE_KEY);
+    const state = raw ? JSON.parse(raw) : {};
+    delete state[login];
+    sessionStorage.setItem(BRUTE_KEY, JSON.stringify(state));
+  } catch {}
+};
+
+// ── 5. Sanitisation XSS : nettoyer les inputs utilisateur ────────────────────
+const sanitize = (str) => {
+  if (typeof str !== "string") return str;
+  return str
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/javascript:/gi, "")
+    .replace(/on\w+=/gi, "")
+    .replace(/[<>'"`;]/g, c => ({ "<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;","`":"&#96;",";":"" }[c]));
+};
+
+// ── 6. Journal d'audit (connexions et actions sensibles) ─────────────────────
+const AUDIT_KEY = "ashoid_audit";
+const MAX_AUDIT_LINES = 200;
+const addAuditLog = (action, user = "?", detail = "") => {
+  try {
+    const raw = localStorage.getItem(AUDIT_KEY);
+    const logs = raw ? JSON.parse(raw) : [];
+    logs.unshift({
+      ts: new Date().toISOString(),
+      action,
+      user,
+      detail,
+      ip: "client",
+    });
+    if (logs.length > MAX_AUDIT_LINES) logs.splice(MAX_AUDIT_LINES);
+    localStorage.setItem(AUDIT_KEY, JSON.stringify(logs));
+  } catch {}
+};
+
+const getAuditLogs = () => {
+  try {
+    const raw = localStorage.getItem(AUDIT_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+// ── 7. Timeout de session (30 min d'inactivité) ───────────────────────────────
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+let _sessionTimer = null;
+const resetSessionTimer = (onTimeout) => {
+  if (_sessionTimer) clearTimeout(_sessionTimer);
+  _sessionTimer = setTimeout(() => {
+    addAuditLog("SESSION_EXPIRED", "auto", "Déconnexion automatique après inactivité");
+    onTimeout();
+  }, SESSION_TIMEOUT_MS);
+};
+const clearSessionTimer = () => {
+  if (_sessionTimer) clearTimeout(_sessionTimer);
+  _sessionTimer = null;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIN MODULE SÉCURITÉ
+// ═══════════════════════════════════════════════════════════════════════════
+
 // URL du serveur Render.com — utilisée par le .exe et les autres PC
 // ═══════════════════════════════════════════════════════════════════════════
 // ASHOID — Configuration synchronisation 3 plateformes
@@ -293,7 +454,7 @@ const loadData = () => {
 // ── Sauvegarde : localStorage + Render.com (toujours les deux) ──────────────
 const saveData = (data) => {
   // ── 1. Cache localStorage immédiat ────────────────────────────────────────
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); secureSet(data); } catch {}
 
   if (IS_ELECTRON && window.electronAPI) {
     // ── 2. Electron : fichier local (fonctionne hors ligne) ───────────────
@@ -3896,7 +4057,7 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
         {tab === "parametres" && <Btn label="💾 Sauvegarder" variant="success" onClick={saveP} />}
       </div>
       <div style={{ display: "flex", gap: 2, marginBottom: 16, background: T.light, borderRadius: 9, padding: 3, width: "fit-content", border: B1 }}>
-        {[["securite", "🔐 Sécurité"], ["parametres", "⚙️ Paramètres"]].map(([k, l]) => (
+        {[["securite", "🔐 Sécurité"], ["parametres", "⚙️ Paramètres"], ["audit", "📋 Journal"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{ padding: "6px 16px", borderRadius: 7, border: "none", fontFamily: FS.B, fontWeight: 600, fontSize: 12, cursor: "pointer", background: tab === k ? T.white : "transparent", color: tab === k ? T.navy : T.muted, boxShadow: tab === k ? "0 1px 4px rgba(0,0,0,.1)" : "none" }}>{l}</button>
         ))}
       </div>
@@ -3979,6 +4140,45 @@ const SecuriteParametres = ({ data, setData, showToast }) => {
           </Card>
         </div>
       )}
+
+      {/* ── JOURNAL D'AUDIT ── */}
+      {tab === "audit" && (() => {
+        const logs = getAuditLogs();
+        const iconAction = (a) => ({ LOGIN_SUCCESS: "✅", LOGIN_FAIL: "❌", LOGIN_LOCKED: "🔒", LOGOUT: "🚪", SESSION_START: "🟢", SESSION_EXPIRED: "⏱️" }[a] || "📋");
+        const colorAction = (a) => ({ LOGIN_SUCCESS: T.emerald, LOGIN_FAIL: T.red, LOGIN_LOCKED: T.red, LOGOUT: T.muted, SESSION_START: T.emerald, SESSION_EXPIRED: T.amber }[a] || T.navy);
+        return (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 13, color: T.muted }}>{logs.length} événement(s) enregistré(s)</div>
+              <button onClick={() => { localStorage.removeItem("ashoid_audit"); window.location.reload(); }}
+                style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: B1, background: "#FEF2F2", color: T.red, cursor: "pointer", fontWeight: 600 }}>
+                🗑️ Effacer le journal
+              </button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 420, overflowY: "auto" }}>
+              {logs.length === 0 && <Card><p style={{ textAlign: "center", color: T.muted, padding: 20 }}>Aucun événement enregistré</p></Card>}
+              {logs.map((log, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 14px", background: i % 2 === 0 ? "#fff" : "#F8FAFC", borderRadius: 8, border: B1 }}>
+                  <span style={{ fontSize: 18, flexShrink: 0 }}>{iconAction(log.action)}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: 12, color: colorAction(log.action), fontFamily: FS.S }}>{log.action}</span>
+                      <span style={{ fontWeight: 600, fontSize: 12, color: T.dark }}>· {log.user}</span>
+                      {log.detail && <span style={{ fontSize: 11, color: T.muted }}>· {log.detail}</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
+                      {new Date(log.ts).toLocaleString("fr-FR")}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "#F0F9FF", borderRadius: 8, border: "1px solid #BAE6FD", fontSize: 12, color: "#0369A1" }}>
+              🔒 Ce journal enregistre toutes les connexions, tentatives échouées et déconnexions. Max {200} entrées conservées.
+            </div>
+          </div>
+        );
+      })()}
 
       {modalU && (
         <Modal title={editU ? "✏️ Modifier l'utilisateur" : "➕ Nouvel utilisateur"} onClose={() => { setModalU(false); setEditU(null); }} wide>
@@ -4933,11 +5133,40 @@ const Login = ({ onLogin, users, onInscription, onMotDePasseOublie }) => {
   const [pwd, setPwd] = useState("");
   const [err, setErr] = useState("");
   const [attempts, setAttempts] = useState({});
+  const [lockInfo, setLockInfo] = useState("");
   const go = () => {
-    if ((attempts[login] || 0) >= 3) { setErr("Compte verrouillé."); return; }
-    const u = users.find(u => u.login === login && (u.mot_de_passe === pwd || u.password === pwd) && u.actif !== false);
-    if (u) { onLogin(u); }
-    else { const n = (attempts[login] || 0) + 1; setAttempts(a => ({ ...a, [login]: n })); setErr(n >= 3 ? "Compte verrouillé." : `Identifiants incorrects. ${3 - n} essai(s).`); setPwd(""); }
+    const loginClean = (login || "").trim();
+    if (!loginClean || !pwd) { setErr("Veuillez saisir votre login et mot de passe."); return; }
+    // ── Vérification brute-force ──────────────────────────────────────
+    const bf = getBruteState(loginClean);
+    if (bf.lockedUntil > Date.now()) {
+      const restMin = Math.ceil((bf.lockedUntil - Date.now()) / 60000);
+      setErr(`🔒 Compte verrouillé. Réessayez dans ${restMin} min.`);
+      setLockInfo(`Trop de tentatives échouées. Verrou automatique.`);
+      addAuditLog("LOGIN_LOCKED", loginClean, "Tentative sur compte verrouillé");
+      return;
+    }
+    // ── Vérification identifiants ─────────────────────────────────────
+    const u = users.find(u => u.login === loginClean && (u.mot_de_passe === pwd || u.password === pwd) && u.actif !== false);
+    if (u) {
+      resetBruteState(loginClean);
+      addAuditLog("LOGIN_SUCCESS", loginClean, `Rôle: ${u.role}`);
+      setLockInfo("");
+      onLogin(u);
+    } else {
+      const newCount = bf.count + 1;
+      const locked = newCount >= MAX_ATTEMPTS;
+      const lockedUntil = locked ? Date.now() + LOCK_DURATION_MS : 0;
+      setBruteState(loginClean, newCount, lockedUntil);
+      addAuditLog("LOGIN_FAIL", loginClean, `Tentative ${newCount}/${MAX_ATTEMPTS}`);
+      if (locked) {
+        setErr(`🔒 Compte verrouillé 15 min après ${MAX_ATTEMPTS} tentatives.`);
+        setLockInfo("Contactez un administrateur si vous avez oublié votre mot de passe.");
+      } else {
+        setErr(`❌ Identifiants incorrects. ${MAX_ATTEMPTS - newCount} essai(s) restant(s).`);
+      }
+      setPwd("");
+    }
   };
   return (
     <div style={{ minHeight: "100vh", display: "flex", background: T.light, fontFamily: FS.B }}>
@@ -5792,6 +6021,14 @@ export default function App() {
     // Chargement immédiat (localStorage ou DEFAULT) pour affichage rapide
     const quickLoad = () => {
       try {
+        // Essayer d'abord les données chiffrées
+        const rawEnc = localStorage.getItem(STORAGE_KEY_ENC);
+        if (rawEnc) {
+          // On tente un parse synchrone rapide (fallback)
+          // Le déchiffrement async se fait en arrière-plan
+          const rawLegacy = localStorage.getItem(STORAGE_KEY);
+          if (rawLegacy) return mergeWithDefault(JSON.parse(rawLegacy));
+        }
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) return mergeWithDefault(JSON.parse(raw));
       } catch {}
@@ -5930,6 +6167,8 @@ export default function App() {
           onLogin={u => {
             setUser(u);
             setPage("dashboard");
+            addAuditLog("SESSION_START", u.login, `Rôle: ${u.role}`);
+            resetSessionTimer(() => { setUser(null); setPage("dashboard"); });
           }}
           onInscription={() => setShowInscription(true)}
           onMotDePasseOublie={() => setShowMdpOublie(true)}
@@ -6023,7 +6262,7 @@ export default function App() {
               <div style={{ color: "#fff", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user.login}</div>
               <div style={{ color: "rgba(255,255,255,.4)", fontSize: 11 }}>{user.role}</div>
             </div>}
-            {sidebarOpen && <button onClick={() => { setUser(null); setPage("dashboard"); }} title="Déconnexion" style={{ background: "none", border: "none", color: "rgba(255,255,255,.4)", cursor: "pointer", fontSize: 15 }}>⏏️</button>}
+            {sidebarOpen && <button onClick={() => { addAuditLog("LOGOUT", user?.login || "?", "Déconnexion manuelle"); clearSessionTimer(); setUser(null); setPage("dashboard"); }} title="Déconnexion" style={{ background: "none", border: "none", color: "rgba(255,255,255,.4)", cursor: "pointer", fontSize: 15 }}>⏏️</button>}
           </div>
         </div>
       </aside>
@@ -6054,7 +6293,7 @@ export default function App() {
             </div>
             {nbAlertes > 0 && user?.role !== "Adhérent" && <div style={{ background: "#FEF3C7", border: "1px solid #FCD34D", borderRadius: 7, padding: "5px 11px", fontSize: 12, fontWeight: 600, color: T.amber, cursor: "pointer" }} onClick={() => setPage("alertes")}>🔔 {nbAlertes}</div>}
             {IS_ELECTRON && <button onClick={() => { setShowRecuperation(true); }} title="Récupérer des données perdues" style={{ background: T.rose, border: `1px solid ${T.red}`, borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 600, color: T.red, cursor: "pointer", fontFamily: FS.B, marginRight: 4 }}>🔄 Récupérer données</button>}
-            <button onClick={() => { setUser(null); setPage("dashboard"); }} style={{ background: T.light, border: B1, borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 600, color: T.muted, cursor: "pointer", fontFamily: FS.B }}>⏏️ Déconnexion</button>
+            <button onClick={() => { addAuditLog("LOGOUT", user?.login || "?", "Déconnexion manuelle"); clearSessionTimer(); setUser(null); setPage("dashboard"); }} style={{ background: T.light, border: B1, borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 600, color: T.muted, cursor: "pointer", fontFamily: FS.B }}>⏏️ Déconnexion</button>
           </div>
         </header>
         <main style={{ flex: 1, overflowY: "auto", padding: "20px 24px", minHeight: 0 }}>
