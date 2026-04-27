@@ -5905,6 +5905,7 @@ const MODULES = [
   { id: "votes_ag",        label: "Votes & AG",         icon: "🗳️", roles: ["Admin","Secrétaire","Trésorier","Adhérent"] },
   { id: "documents",       label: "Documents",          icon: "📁", roles: ["Admin","Trésorier","Secrétaire"] },
   { id: "communication",   label: "Comm. & Annuaire",   icon: "📢", roles: ["Admin","Trésorier","Secrétaire","Lecture","Adhérent"] },
+  { id: "messagerie",      label: "Messagerie",         icon: "💬", roles: ["Admin","Trésorier","Secrétaire","Adhérent"] },
   { id: "alertes",         label: "Alertes",            icon: "🔔", roles: ["Admin","Trésorier","Secrétaire"] },
   { id: "statistiques",    label: "Statistiques",       icon: "📊", roles: ["Admin","Trésorier","Secrétaire","Adhérent"] },
   { id: "mediatheque",     label: "Médiathèque",        icon: "🖼️", roles: ["Admin","Secrétaire","Lecture","Adhérent"] },
@@ -5917,7 +5918,7 @@ const GROUPS = [
   { label: "Principal",  ids: ["dashboard", "recensement", "sortissants", "espace_adherent"] },
   { label: "Finance",    ids: ["cotisations", "finances", "bilan", "dons", "budget"] },
   { label: "Activités",  ids: ["evenements", "reunions", "projets", "votes_ag"] },
-  { label: "Outils",     ids: ["documents", "communication", "alertes", "statistiques", "mediatheque"] },
+  { label: "Outils",     ids: ["documents", "communication", "messagerie", "alertes", "statistiques", "mediatheque"] },
   { label: "Admin",      ids: ["demandes_admin", "securite_params"] },
 ];
 
