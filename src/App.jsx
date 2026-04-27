@@ -434,6 +434,7 @@ const mergeWithDefault = (saved) => ({
   demandes_cotisation:  saved.demandes_cotisation  || [],
   medias_galerie:       saved.medias_galerie        || [],
   sortissants:          saved.sortissants           || [],
+  messages:             saved.messages              || [],
 });
 
 // ── Chargement initial (synchrone pour localStorage/Electron, async pour serveur)
@@ -1348,7 +1349,7 @@ const Recensement = ({ data, setData, showToast }) => {
   return (
     <div className="fade-up">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
-        <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>👥 Recensement</h2><p style={{ color: T.muted, fontSize: 13 }}>{data.personnes.length} adhérent(s) · {filtered.length} affiché(s)</p></div>
+        <div><h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>👥 Adhérents</h2><p style={{ color: T.muted, fontSize: 13 }}>{data.personnes.length} adhérent(s) · {filtered.length} affiché(s)</p></div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Btn label="📥 Importer XLSX" variant="ghost" onClick={() => setImportModal(true)} />
           <Btn label="📤 Export XLSX" variant="teal" onClick={() => exportXLSX_adherents(filtered).catch(e=>alert("Erreur export: "+e))} />
@@ -3849,12 +3850,16 @@ const Alertes = ({ data, setData, showToast }) => {
     setWaModal(true);
   };
 
+  const [msgPersonnalise, setMsgPersonnalise] = useState("");
+  const msgDefault = (prenom, nom, montant) => {
+    const assoc = data.config?.nom_association || "Mlambavou";
+    return `Bonjour ${prenom} ${nom},\n\nNous vous rappelons que votre cotisation de ${montant || data.config?.montant_cotisation || 10} € pour le mois de ${moisActuel} ${anneeActuelle} n'a pas encore été réglée.\n\nMerci de procéder au paiement dans les meilleurs délais.\n\nCordialement,\n${assoc}`;
+  };
   const msgWA = (prenom, nom, montant) => {
-    const assoc = data.config?.nom_association || "ASHOID";
-    const m = encodeURIComponent(
-      `Bonjour ${prenom} ${nom},\n\nNous vous rappelons que votre cotisation de ${montant || data.config?.montant_cotisation || 10} € pour le mois de ${moisActuel} ${anneeActuelle} n'a pas encore été réglée.\n\nMerci de procéder au paiement dans les meilleurs délais.\n\nCordialement,\n${assoc}`
-    );
-    return m;
+    const texte = msgPersonnalise.trim()
+      ? msgPersonnalise.replace(/\{prenom\}/g, prenom).replace(/\{nom\}/g, nom).replace(/\{montant\}/g, montant || data.config?.montant_cotisation || 10).replace(/\{mois\}/g, moisActuel).replace(/\{annee\}/g, anneeActuelle)
+      : msgDefault(prenom, nom, montant);
+    return encodeURIComponent(texte);
   };
 
   return (
@@ -3925,9 +3930,15 @@ const Alertes = ({ data, setData, showToast }) => {
             📲 <strong>{waListe.length}</strong> adhérent(s) non à jour pour {moisActuel} {anneeActuelle}. Cliquez sur le bouton vert pour ouvrir WhatsApp avec le message pré-rempli.
           </div>
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8 }}>APERÇU DU MESSAGE</div>
-            <div style={{ background: "#ECF8F1", borderRadius: 9, padding: "10px 14px", fontSize: 12, color: T.dark, lineHeight: 1.7, fontStyle: "italic", whiteSpace: "pre-line", border: "1px solid #25D36640" }}>
-              {`Bonjour [Prénom Nom],\n\nNous vous rappelons que votre cotisation de ${data.config?.montant_cotisation || 10} € pour le mois de ${moisActuel} ${anneeActuelle} n'a pas encore été réglée.\n\nMerci de procéder au paiement dans les meilleurs délais.\n\nCordialement,\n${data.config?.nom_association || "ASHOID"}`}
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 6 }}>MESSAGE PERSONNALISÉ <span style={{ fontWeight: 400, color: T.muted }}>(variables: {'{prenom}'} {'{nom}'} {'{montant}'} {'{mois}'} {'{annee}'})</span></div>
+            <textarea
+              value={msgPersonnalise}
+              onChange={e => setMsgPersonnalise(e.target.value)}
+              placeholder={`Bonjour {prenom} {nom},\n\nNous vous rappelons que votre cotisation de {montant} € pour le mois de {mois} {annee} n'a pas encore été réglée.\n\nMerci de procéder au paiement.\n\nCordialement,\n${data.config?.nom_association || "Mlambavou"}`}
+              style={{ width: "100%", minHeight: 110, border: "1.5px solid #25D366", borderRadius: 9, padding: "10px 14px", fontSize: 12, color: T.dark, lineHeight: 1.7, fontFamily: "inherit", resize: "vertical", background: "#F0FDF4", boxSizing: "border-box" }}
+            />
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>
+              Laissez vide pour utiliser le message par défaut. Utilisez les variables entre accolades pour personnaliser.
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 340, overflowY: "auto" }}>
@@ -5881,7 +5892,7 @@ const isReadOnly = (user) => user?.role === "Adhérent";
 
 const MODULES = [
   { id: "dashboard",       label: "Dashboard",         icon: "🏠", roles: ["Admin","Trésorier","Secrétaire","Lecture","Adhérent"] },
-  { id: "recensement",     label: "Recensement",        icon: "👥", roles: ["Admin","Secrétaire"] },
+  { id: "recensement",     label: "Adhérents",        icon: "👥", roles: ["Admin","Secrétaire"] },
   { id: "sortissants",     label: "Sortissants Hambou", icon: "🏘️", roles: ["Admin","Secrétaire"] },
   { id: "cotisations",     label: "Cotisations",        icon: "💳", roles: ["Admin","Trésorier"] },
   { id: "finances",        label: "Finances",           icon: "📈", roles: ["Admin","Trésorier"] },
@@ -5913,6 +5924,323 @@ const GROUPS = [
 // ═══════════════════════════════════════════════════════════════════
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════
+// MODULE MESSAGERIE — Chat interne + Alertes admin
+// ═══════════════════════════════════════════════════════════════════
+const Messagerie = ({ data, setData, showToast, user }) => {
+  const [conv, setConv] = useState(null); // conversation sélectionnée
+  const [texte, setTexte] = useState("");
+  const [newMsg, setNewMsg] = useState(false); // nouvelle conversation
+  const [dest, setDest] = useState("");
+  const [sujet, setSujet] = useState("");
+  const [onglet, setOnglet] = useState("messages"); // messages | alertes
+  const [alerteTexte, setAlerteTexte] = useState("");
+  const [alerteDest, setAlerteDest] = useState("tous");
+  const endRef = useRef(null);
+
+  const msgs = data.messages || [];
+  const moi = user?.login || "?";
+  const monRole = user?.role || "Adhérent";
+
+  // Peut envoyer des alertes (admin seulement)
+  const isAdmin = ["Admin","Secrétaire","Trésorier"].includes(monRole);
+
+  // Grouper les messages en conversations
+  const convs = (() => {
+    const map = {};
+    msgs.forEach(m => {
+      const key = [m.de, m.a].sort().join("___");
+      if (!map[key]) map[key] = { key, participants: [m.de, m.a], messages: [], lu: true };
+      map[key].messages.push(m);
+      if (m.a === moi && !m.lu) map[key].lu = false;
+    });
+    return Object.values(map).sort((a, b) => {
+      const la = a.messages[a.messages.length - 1]?.ts || "";
+      const lb = b.messages[b.messages.length - 1]?.ts || "";
+      return lb.localeCompare(la);
+    });
+  })();
+
+  const alertes = (data.messages || []).filter(m => m.type === "alerte" && (m.a === "tous" || m.a === moi || m.de === moi));
+
+  // Interlocuteur dans une conversation
+  const interlocuteur = (c) => c.participants.find(p => p !== moi) || "?";
+  const userInfo = (login) => {
+    const u = (data.utilisateurs || []).find(u => u.login === login);
+    return u ? `${u.prenom || ""} ${u.nom || ""}`.trim() || login : login;
+  };
+
+  const envoyerMessage = () => {
+    if (!texte.trim() || !conv) return;
+    const autre = interlocuteur(conv);
+    const nm = { id: genId(), de: moi, a: autre, texte: texte.trim(), ts: new Date().toISOString(), lu: false, type: "message" };
+    setData(d => ({ ...d, messages: [...(d.messages || []), nm] }));
+    setTexte("");
+    setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+  };
+
+  const envoyerNouveau = () => {
+    if (!texte.trim() || !dest) { showToast("Destinataire et message requis.", "error"); return; }
+    const nm = { id: genId(), de: moi, a: dest, texte: texte.trim(), ts: new Date().toISOString(), lu: false, type: "message", sujet };
+    setData(d => ({ ...d, messages: [...(d.messages || []), nm] }));
+    setTexte(""); setSujet(""); setNewMsg(false);
+    showToast("Message envoyé !");
+    // Ouvrir la conversation
+    const key = [moi, dest].sort().join("___");
+    const fake = { key, participants: [moi, dest], messages: [nm], lu: true };
+    setConv(fake);
+  };
+
+  const envoyerAlerte = () => {
+    if (!alerteTexte.trim()) { showToast("Message vide.", "error"); return; }
+    const nm = { id: genId(), de: moi, a: alerteDest, texte: alerteTexte.trim(), ts: new Date().toISOString(), lu: false, type: "alerte" };
+    setData(d => ({ ...d, messages: [...(d.messages || []), nm] }));
+    setAlerteTexte(""); showToast(`📣 Alerte envoyée à ${alerteDest === "tous" ? "tous les membres" : alerteDest} !`);
+  };
+
+  const marquerLu = (c) => {
+    const autres = c.participants.filter(p => p !== moi);
+    setData(d => ({ ...d, messages: (d.messages || []).map(m =>
+      m.a === moi && autres.includes(m.de) ? { ...m, lu: true } : m
+    )}));
+  };
+
+  const supprimerMsg = (id) => {
+    setData(d => ({ ...d, messages: (d.messages || []).filter(m => m.id !== id) }));
+  };
+
+  const utilisateurs = (data.utilisateurs || []).filter(u => u.login !== moi && u.actif !== false);
+  const nonLus = msgs.filter(m => m.a === moi && !m.lu && m.type !== "alerte").length;
+  const alertesNonLues = msgs.filter(m => m.type === "alerte" && !m.lu && (m.a === "tous" || m.a === moi)).length;
+
+  // Conversations avec messages actualisés
+  const convActuelle = conv ? {
+    ...conv,
+    messages: msgs.filter(m => conv.participants.includes(m.de) && conv.participants.includes(m.a) && m.type !== "alerte")
+  } : null;
+
+  const tabStyle = (id) => ({
+    padding: "6px 16px", borderRadius: 7, border: "none", fontFamily: FS.B,
+    fontWeight: 600, fontSize: 12, cursor: "pointer",
+    background: onglet === id ? T.navy : "transparent",
+    color: onglet === id ? "#fff" : T.muted
+  });
+
+  return (
+    <div className="fade-up" style={{ height: "calc(100vh - 120px)", display: "flex", flexDirection: "column" }}>
+      {/* En-tête */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div>
+          <h2 style={{ fontFamily: FS.S, fontSize: 21, fontWeight: 800, color: T.navy, marginBottom: 3 }}>
+            💬 Messagerie
+          </h2>
+          <p style={{ color: T.muted, fontSize: 13 }}>
+            {nonLus > 0 && <span style={{ background: T.red, color: "#fff", borderRadius: 10, padding: "1px 8px", fontSize: 11, fontWeight: 700, marginRight: 6 }}>{nonLus}</span>}
+            Communication interne
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {isAdmin && (
+            <button onClick={() => setOnglet(onglet === "alertes" ? "messages" : "alertes")}
+              style={{ padding: "8px 16px", borderRadius: 8, border: `2px solid ${T.amber}`, background: onglet === "alertes" ? T.amber : "#fff", color: onglet === "alertes" ? "#fff" : T.amber, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: FS.B, display: "flex", alignItems: "center", gap: 6 }}>
+              📣 {onglet === "alertes" ? "Retour messages" : `Alertes${alertesNonLues > 0 ? ` (${alertesNonLues})` : ""}`}
+            </button>
+          )}
+          {onglet === "messages" && (
+            <button onClick={() => setNewMsg(true)}
+              style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: T.navy, color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: FS.B }}>
+              ✉️ Nouveau message
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── ONGLET ALERTES ── */}
+      {onglet === "alertes" && isAdmin && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* Formulaire envoi alerte */}
+          <Card>
+            <h4 style={{ fontFamily: FS.S, fontSize: 13, fontWeight: 700, color: T.navy, marginBottom: 12 }}>📣 Envoyer une alerte / annonce</h4>
+            <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+              <select value={alerteDest} onChange={e => setAlerteDest(e.target.value)}
+                style={{ border: B1, borderRadius: 7, padding: "8px 12px", fontSize: 13, color: T.dark, flex: "0 0 auto" }}>
+                <option value="tous">📢 Tous les membres</option>
+                {utilisateurs.map(u => (
+                  <option key={u.login} value={u.login}>{userInfo(u.login)} ({u.role})</option>
+                ))}
+              </select>
+            </div>
+            <textarea value={alerteTexte} onChange={e => setAlerteTexte(e.target.value)}
+              placeholder="Rédigez votre annonce ou alerte ici..."
+              style={{ width: "100%", minHeight: 100, border: `1.5px solid ${T.amber}`, borderRadius: 9, padding: "10px 14px", fontSize: 13, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box", background: "#FFFBEB" }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+              <button onClick={envoyerAlerte} style={{ padding: "9px 22px", borderRadius: 8, border: "none", background: T.amber, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: FS.B }}>
+                📣 Envoyer l'alerte
+              </button>
+            </div>
+          </Card>
+          {/* Historique alertes */}
+          <Card>
+            <h4 style={{ fontFamily: FS.S, fontSize: 13, fontWeight: 700, color: T.navy, marginBottom: 12 }}>Historique des alertes</h4>
+            {alertes.length === 0 && <p style={{ color: T.muted, fontSize: 13, textAlign: "center", padding: 16 }}>Aucune alerte envoyée</p>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 280, overflowY: "auto" }}>
+              {[...alertes].reverse().map(m => (
+                <div key={m.id} style={{ background: "#FFFBEB", border: `1.5px solid ${T.amber}`, borderRadius: 9, padding: "10px 14px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 20, flexShrink: 0 }}>📣</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: T.amber }}>
+                        {userInfo(m.de)} → {m.a === "tous" ? "Tous les membres" : userInfo(m.a)}
+                      </span>
+                      <span style={{ fontSize: 10, color: T.muted }}>{new Date(m.ts).toLocaleString("fr-FR")}</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: T.dark, whiteSpace: "pre-wrap" }}>{m.texte}</div>
+                  </div>
+                  {(moi === m.de || isAdmin) && (
+                    <button onClick={() => supprimerMsg(m.id)} style={{ background: "none", border: "none", color: T.red, cursor: "pointer", fontSize: 16, flexShrink: 0 }}>🗑️</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── ONGLET MESSAGES ── */}
+      {onglet === "messages" && (
+        <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0 }}>
+          {/* Liste conversations */}
+          <div style={{ flex: "0 0 260px", display: "flex", flexDirection: "column", gap: 6, overflowY: "auto" }}>
+            {convs.length === 0 && (
+              <Card><p style={{ color: T.muted, fontSize: 13, textAlign: "center", padding: 20 }}>Aucune conversation</p></Card>
+            )}
+            {convs.map(c => {
+              const autre = interlocuteur(c);
+              const dernierMsg = c.messages[c.messages.length - 1];
+              const nonLuConv = c.messages.filter(m => m.a === moi && !m.lu).length;
+              const isActive = conv?.key === c.key;
+              return (
+                <div key={c.key} onClick={() => { setConv(c); marquerLu(c); }}
+                  style={{ padding: "12px 14px", borderRadius: 10, cursor: "pointer", background: isActive ? T.navy : "#fff", border: `1.5px solid ${isActive ? T.navy : nonLuConv > 0 ? T.blue : T.border}`, transition: "all .15s" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: isActive ? "#fff" : T.dark }}>{userInfo(autre)}</span>
+                    {nonLuConv > 0 && <span style={{ background: T.red, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{nonLuConv}</span>}
+                  </div>
+                  {dernierMsg && (
+                    <div style={{ fontSize: 11, color: isActive ? "rgba(255,255,255,.7)" : T.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {dernierMsg.de === moi ? "Vous : " : ""}{dernierMsg.texte}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Zone chat */}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "#fff", borderRadius: 12, border: B1, overflow: "hidden" }}>
+            {!conv ? (
+              <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: T.muted, fontSize: 14 }}>
+                👈 Sélectionnez une conversation ou créez-en une nouvelle
+              </div>
+            ) : (
+              <>
+                {/* Header conv */}
+                <div style={{ padding: "12px 16px", borderBottom: B1, background: T.navy, display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: T.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, color: "#fff", fontWeight: 700, flexShrink: 0 }}>
+                    {userInfo(interlocuteur(conv))[0]?.toUpperCase() || "?"}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 700, color: "#fff", fontSize: 14 }}>{userInfo(interlocuteur(conv))}</div>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,.6)" }}>
+                      {(data.utilisateurs || []).find(u => u.login === interlocuteur(conv))?.role || ""}
+                    </div>
+                  </div>
+                </div>
+                {/* Messages */}
+                <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {convActuelle?.messages.length === 0 && (
+                    <p style={{ color: T.muted, textAlign: "center", fontSize: 13 }}>Aucun message</p>
+                  )}
+                  {(convActuelle?.messages || []).map(m => {
+                    const isMoi = m.de === moi;
+                    return (
+                      <div key={m.id} style={{ display: "flex", justifyContent: isMoi ? "flex-end" : "flex-start", gap: 6, alignItems: "flex-end" }}>
+                        {!isMoi && (
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: T.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: "#fff", fontWeight: 700, flexShrink: 0 }}>
+                            {userInfo(m.de)[0]?.toUpperCase() || "?"}
+                          </div>
+                        )}
+                        <div style={{ maxWidth: "70%" }}>
+                          <div style={{ padding: "9px 14px", borderRadius: isMoi ? "16px 16px 4px 16px" : "16px 16px 16px 4px", background: isMoi ? T.navy : T.light, color: isMoi ? "#fff" : T.dark, fontSize: 13, lineHeight: 1.5, wordBreak: "break-word" }}>
+                            {m.texte}
+                          </div>
+                          <div style={{ fontSize: 10, color: T.muted, marginTop: 3, textAlign: isMoi ? "right" : "left" }}>
+                            {new Date(m.ts).toLocaleString("fr-FR")} {isMoi && (m.lu ? "✓✓" : "✓")}
+                          </div>
+                        </div>
+                        {isMoi && (
+                          <button onClick={() => supprimerMsg(m.id)} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 14, flexShrink: 0, opacity: 0.5 }}>✕</button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div ref={endRef} />
+                </div>
+                {/* Input */}
+                <div style={{ padding: "12px 16px", borderTop: B1, display: "flex", gap: 10, background: T.light }}>
+                  <textarea value={texte} onChange={e => setTexte(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); envoyerMessage(); } }}
+                    placeholder="Écrire un message... (Entrée pour envoyer, Shift+Entrée pour sauter une ligne)"
+                    style={{ flex: 1, border: B1, borderRadius: 9, padding: "9px 14px", fontSize: 13, fontFamily: "inherit", resize: "none", minHeight: 44, maxHeight: 100, background: "#fff", boxSizing: "border-box" }}
+                    rows={1}
+                  />
+                  <button onClick={envoyerMessage} disabled={!texte.trim()}
+                    style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: texte.trim() ? T.navy : T.border, color: texte.trim() ? "#fff" : T.muted, fontWeight: 700, fontSize: 14, cursor: texte.trim() ? "pointer" : "default", flexShrink: 0 }}>
+                    ➤
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL NOUVEAU MESSAGE ── */}
+      {newMsg && (
+        <Modal title="✉️ Nouveau message" onClose={() => setNewMsg(false)} wide>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 5 }}>DESTINATAIRE</label>
+            <select value={dest} onChange={e => setDest(e.target.value)}
+              style={{ width: "100%", border: B1, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.dark }}>
+              <option value="">-- Choisir un destinataire --</option>
+              {utilisateurs.map(u => (
+                <option key={u.login} value={u.login}>{userInfo(u.login)} ({u.role})</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 5 }}>SUJET (optionnel)</label>
+            <input value={sujet} onChange={e => setSujet(e.target.value)} placeholder="Sujet..."
+              style={{ width: "100%", border: B1, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: T.dark, boxSizing: "border-box" }} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted, display: "block", marginBottom: 5 }}>MESSAGE</label>
+            <textarea value={texte} onChange={e => setTexte(e.target.value)}
+              placeholder="Rédigez votre message..."
+              style={{ width: "100%", minHeight: 120, border: B1, borderRadius: 9, padding: "10px 14px", fontSize: 13, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }}
+            />
+          </div>
+          <ModalFooter onCancel={() => setNewMsg(false)} onSave={envoyerNouveau} saveLabel="✉️ Envoyer" />
+        </Modal>
+      )}
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════
+
 export default function App() {
   const [data, setDataRaw] = useState(loadData);
   const [user, setUser] = useState(null);
@@ -6198,6 +6526,7 @@ export default function App() {
       case "votes_ag": return <VotesAssemblees {...props} />;
       case "documents": return <Documents {...props} />;
       case "communication": return <CommunicationAnnuaire {...props} />;
+      case "messagerie": return <Messagerie {...props} user={user} />;
       case "alertes": return <Alertes {...props} />;
       case "statistiques": return <Statistiques {...props} />;
       case "mediatheque": return <Mediatheque {...props} />;
